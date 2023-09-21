@@ -1,0 +1,53 @@
+{
+    "listenAddress" : "127.0.0.1",
+    "listenPort": 8082,
+    "logFile": "",
+    "logLevel": "debug",
+    "serverReadTimeoutSecs": 120,
+    "serverWriteTimeoutSecs": 60,
+    "corsAllowedOrigins": ["http://localhost:8081"],
+    "db" : {
+        "host": "dbserver",
+        "name": "scollex",
+        "user": "scollex",
+        "password": "*******",
+        "port": 5432,
+        "poolSize": 5
+    },
+    "corpora": [
+        {
+            "name": "intercorp_v13ud_cs",
+            "size": 259002702,
+            "syntax": {
+                "parentIdxAttr": {"name": "parent", "verticalCol": 10},
+                "lemmaAttr": {"name": "lemma", "verticalCol": 3},
+                "parLemmaAttr": {"name": "p_lemma", "verticalCol": 11},
+                "posAttr": {"name": "upos", "verticalCol": 4},
+                "parPosAttr": {"name": "p_upos", "verticalCol": 12},
+                "funcAttr": {"name": "deprel", "verticalCol": 9},
+                "nounPosValue": "NOUN",
+                "verbPosValue": "VERB",
+                "nounModifiedValue": "nmod",
+                "nounSubjectValue": "nsubj",
+                "nounObjectValue": "obj|iobj"
+            }
+        },
+        {
+            "name": "intercorp_v13ud_en",
+            "size": 161867949,
+            "syntax": {
+                "parentIdxAttr": {"name": "parent", "verticalCol": 8},
+                "lemmaAttr": {"name": "lemma", "verticalCol": 3},
+                "parLemmaAttr": {"name": "p_lemma", "verticalCol": 10},
+                "posAttr": {"name": "upos", "verticalCol": 4},
+                "parPosAttr": {"name": "p_upos", "verticalCol": 11},
+                "funcAttr": {"name": "deprel", "verticalCol": 8},
+                "nounPosValue": "NOUN",
+                "verbPosValue": "VERB",
+                "nounModifiedValue": "nmod",
+                "nounSubjectValue": "nsubj",
+                "nounObjectValue": "obj|iobj"
+            }
+        }
+    ]
+}
