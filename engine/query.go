@@ -31,10 +31,6 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-const (
-	candidatesFreqLimit = 15
-)
-
 type Candidate struct {
 	Lemma  string
 	Upos   string
@@ -175,7 +171,7 @@ func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq
 	whereSQL := make([]string, 0, 4)
 	whereSQL = append(whereSQL, "lemma = @lemma", "freq >= @freq")
 	whereArgs := pgx.NamedArgs{}
-	whereArgs["p_lemma"] = lemma
+	whereArgs["lemma"] = lemma
 	whereArgs["freq"] = minFreq
 
 	if deprel != "" {

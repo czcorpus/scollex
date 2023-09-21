@@ -19,7 +19,7 @@
 package engine
 
 const (
-	CandidatesFreqLimit = 15
+	CandidatesFreqLimit = 1
 )
 
 type Word struct {
