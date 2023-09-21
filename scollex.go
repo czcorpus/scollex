@@ -17,7 +17,7 @@ import (
 	"github.com/czcorpus/scollex/cnf"
 	"github.com/czcorpus/scollex/engine"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -41,7 +41,7 @@ func runApiServer(
 	conf *cnf.Conf,
 	syscallChan chan os.Signal,
 	exitEvent chan os.Signal,
-	sqlDB *pgx.Conn,
+	sqlDB *pgxpool.Pool,
 ) {
 	if !conf.LogLevel.IsDebugMode() {
 		gin.SetMode(gin.ReleaseMode)

@@ -28,12 +28,12 @@ import (
 	"github.com/czcorpus/scollex/cql"
 	"github.com/czcorpus/scollex/engine"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Actions struct {
 	corpora *engine.CorporaConf
-	db      *pgx.Conn
+	db      *pgxpool.Pool
 }
 
 func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
@@ -277,7 +277,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 
 func NewActions(
 	corpora *engine.CorporaConf,
-	db *pgx.Conn,
+	db *pgxpool.Pool,
 ) *Actions {
 	return &Actions{
 		corpora: corpora,

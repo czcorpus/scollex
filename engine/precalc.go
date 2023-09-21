@@ -26,6 +26,7 @@ import (
 
 	"github.com/czcorpus/cnc-gokit/collections"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/tomachalek/vertigo/v5"
 )
@@ -131,7 +132,7 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 
 // TODO: update intercorp_v13ud_cs_fcolls set chunk = (FLOOR( 1 + RAND( ) *32))
 
-func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgx.Conn) error {
+func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool) error {
 	pc := &vertigo.ParserConf{
 		InputFilePath:         vertPath,
 		Encoding:              "utf-8",
@@ -214,7 +215,7 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgx.Conn) er
 	return err
 }
 
-func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *pgx.Conn) error {
+func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool) error {
 	return runForDeprel(
 		corpusID,
 		vertPath,

@@ -22,13 +22,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func OpenConnection(conf *DBConf, ctx context.Context) (*pgx.Conn, error) {
+func OpenConnection(conf *DBConf, ctx context.Context) (*pgxpool.Pool, error) {
 	dsn := fmt.Sprintf( // TODO  pool_max_conns=%d
 		"user=%s password=%s host=%s port=%d dbname=%s sslmode=disable",
 		conf.User, conf.Password, conf.Host, conf.Port, conf.Name,
 	)
-	return pgx.Connect(ctx, dsn)
+	return pgxpool.New(ctx, dsn)
 }

@@ -27,6 +27,7 @@ import (
 
 	"github.com/czcorpus/cnc-gokit/collections"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,7 +46,7 @@ type Candidate struct {
 // note: the lifecycle of the instance
 // is "per request"
 type CollDatabase struct {
-	db       *pgx.Conn
+	db       *pgxpool.Pool
 	corpusID string
 	ctx      context.Context
 }
@@ -219,7 +220,7 @@ func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq
 	return ans, nil
 }
 
-func NewCollDatabase(db *pgx.Conn, corpusID string) *CollDatabase {
+func NewCollDatabase(db *pgxpool.Pool, corpusID string) *CollDatabase {
 	return &CollDatabase{
 		db:       db,
 		corpusID: corpusID,
