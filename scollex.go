@@ -1,3 +1,19 @@
+// Copyright 2023 Tomas Machalek <tomas.machalek@gmail.com>
+// Copyright 2023 Institute of the Czech National Corpus,
+// Faculty of Arts, Charles University
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package main
 
 import (
@@ -103,16 +119,17 @@ func main() {
 	}
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "MQUERY - A specialized corpus querying server\n\n")
-		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] server [config.json]\n\t", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] worker [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "SCollEx - a Syntactic Collocations explorer\n\n")
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] start [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] precalc [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] test [config.json]\n\t", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 	action := flag.Arg(0)
 	if action == "version" {
-		fmt.Printf("mquery %s\nbuild date: %s\nlast commit: %s\n", version.Version, version.BuildDate, version.GitCommit)
+		fmt.Printf("scollex %s\nbuild date: %s\nlast commit: %s\n", version.Version, version.BuildDate, version.GitCommit)
 		return
 	}
 	conf := cnf.LoadConfig(flag.Arg(1))
@@ -125,7 +142,7 @@ func main() {
 	} else {
 		logging.SetupLogging(conf.LogFile, conf.LogLevel)
 	}
-	log.Info().Msg("Starting Scollex")
+	log.Info().Msg("Starting SCollEx")
 	cnf.ValidateAndDefaults(conf)
 	syscallChan := make(chan os.Signal, 1)
 	signal.Notify(syscallChan, os.Interrupt)
@@ -153,9 +170,24 @@ func main() {
 			log.Fatal().Msgf("corpus %s not installed", flag.Arg(2))
 			return
 		}
-		err := engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
+		log.Info().Msg("Testing database connection...")
+		_, err := pgDB.Acquire(ctx)
+		if err != nil {
+			log.Fatal().
+				Err(err).
+				Str("dbHost", conf.DB.Host).
+				Int("dbPort", conf.DB.Port).
+				Str("dbName", conf.DB.Name).
+				Msg("...failed to connect to the database")
+			return
+
+		} else {
+			log.Info().Msg("... database connection OK")
+		}
+		err = engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to process")
+			return
 		}
 	default:
 		log.Fatal().Msgf("Unknown action %s", action)
