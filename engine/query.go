@@ -18,6 +18,7 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -43,6 +44,35 @@ type CollDatabase struct {
 	useMatViews bool
 	corpusID    string
 	ctx         context.Context
+}
+
+func (cdb *CollDatabase) TableName() string {
+	return fmt.Sprintf("%s_fcolls", cdb.corpusID)
+}
+
+func (cdb *CollDatabase) TestTableReady() error {
+	tx, err := cdb.db.Begin(cdb.ctx)
+	defer tx.Rollback(cdb.ctx)
+	if err != nil {
+		return err
+	}
+	cmd, err := cdb.db.Exec(
+		cdb.ctx, fmt.Sprintf("INSERT INTO %s_fcolls (id) VALUES (-1)", cdb.corpusID))
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() != 1 {
+		return fmt.Errorf(
+			"problem inserting testing row - num affected rows: %d", cmd.RowsAffected())
+	}
+	row := cdb.db.QueryRow(
+		cdb.ctx, fmt.Sprintf("SELECT id FROM %s_fcolls where id = $1", cdb.corpusID), -1)
+	var v sql.NullInt64
+	err = row.Scan(&v)
+	if err == pgx.ErrNoRows {
+		return nil
+	}
+	return err
 }
 
 func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int64, error) {

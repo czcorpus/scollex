@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	bulkInsertChunkSize = 1000
+	bulkInsertChunkSize = 10000
 )
 
 type CTItem struct {
