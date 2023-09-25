@@ -103,9 +103,10 @@ func main() {
 	}
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "MQUERY - A specialized corpus querying server\n\n")
-		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] server [config.json]\n\t", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] worker [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Scollex - a Syntactic Collocations explorer\n\n")
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] start [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] precalc [config.json]\n\t", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "Usage:\n\t%s [options] test [config.json]\n\t", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 	}
@@ -153,9 +154,24 @@ func main() {
 			log.Fatal().Msgf("corpus %s not installed", flag.Arg(2))
 			return
 		}
-		err := engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
+		log.Info().Msg("Testing database connection...")
+		_, err := pgDB.Acquire(ctx)
+		if err != nil {
+			log.Fatal().
+				Err(err).
+				Str("dbHost", conf.DB.Host).
+				Int("dbPort", conf.DB.Port).
+				Str("dbName", conf.DB.Name).
+				Msg("...failed to connect to the database")
+			return
+
+		} else {
+			log.Info().Msg("... database connection OK")
+		}
+		err = engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to process")
+			return
 		}
 	default:
 		log.Fatal().Msgf("Unknown action %s", action)
