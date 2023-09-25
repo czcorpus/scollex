@@ -100,15 +100,14 @@ func runApiServer(
 		syscallChan <- syscall.SIGTERM
 	}()
 
-	select {
-	case <-exitEvent:
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := srv.Shutdown(ctx)
-		if err != nil {
-			log.Info().Err(err).Msg("Shutdown request error")
-		}
+	<-exitEvent
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := srv.Shutdown(ctx)
+	if err != nil {
+		log.Info().Err(err).Msg("Shutdown request error")
 	}
+
 }
 
 func main() {
@@ -121,7 +120,7 @@ func main() {
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "SCollEx - a Syntactic Collocations explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\t%s [options] start [config.json]\n", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "\t%s [options] precalc [config.json]\n", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "\t%s [options] import [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] test [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
@@ -164,25 +163,26 @@ func main() {
 	switch action {
 	case "start":
 		runApiServer(conf, syscallChan, exitEvent, pgDB)
-	case "precalc":
+	case "import":
 		corpProps := conf.Corpora.GetCorpusProps(flag.Arg(2))
 		if corpProps == nil {
 			log.Fatal().Msgf("corpus %s not installed", flag.Arg(2))
 			return
 		}
-		log.Info().Msg("Testing database connection...")
-		_, err := pgDB.Acquire(ctx)
+		cdb := engine.NewCollDatabase(pgDB, flag.Arg(2), false)
+		log.Info().Msgf("Testing whether the table %s is ready", cdb.TableName())
+		err := cdb.TestTableReady()
 		if err != nil {
 			log.Fatal().
 				Err(err).
 				Str("dbHost", conf.DB.Host).
 				Int("dbPort", conf.DB.Port).
 				Str("dbName", conf.DB.Name).
-				Msg("...failed to connect to the database")
+				Msg("...target db table NOT READY")
 			return
 
 		} else {
-			log.Info().Msg("... database connection OK")
+			log.Info().Msg("... table READY")
 		}
 		err = engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
 		if err != nil {
