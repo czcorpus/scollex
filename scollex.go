@@ -74,16 +74,16 @@ func runApiServer(
 	fcollActions := NewActions(&conf.Corpora, sqlDB)
 
 	engine.GET(
-		"/fcoll/:corpusId/noun-modified-by", fcollActions.NounsModifiedBy)
+		"/query/:corpusId/noun-modified-by", fcollActions.NounsModifiedBy)
 
 	engine.GET(
-		"/fcoll/:corpusId/modifiers-of", fcollActions.ModifiersOf)
+		"/query/:corpusId/modifiers-of", fcollActions.ModifiersOf)
 
 	engine.GET(
-		"/fcoll/:corpusId/verbs-subject", fcollActions.VerbsSubject)
+		"/query/:corpusId/verbs-subject", fcollActions.VerbsSubject)
 
 	engine.GET(
-		"/fcoll/:corpusId/verbs-object", fcollActions.VerbsObject)
+		"/query/:corpusId/verbs-object", fcollActions.VerbsObject)
 
 	log.Info().Msgf("starting to listen at %s:%d", conf.ListenAddress, conf.ListenPort)
 	srv := &http.Server{
