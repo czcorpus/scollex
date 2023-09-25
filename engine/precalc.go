@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	bulkInsertChunkSize = 500
+	bulkInsertChunkSize = 1000
 )
 
 type CTItem struct {
@@ -79,9 +79,7 @@ func expandDeprelMultivalue(value string) []string {
 			Str("expression", value).
 			Msg("deprel expression not fully supported")
 	}
-	for _, t := range tmp {
-		ans = append(ans, t)
-	}
+	ans = append(ans, tmp...)
 	// this along with individual items does not cover whole
 	// expression but it should be ok
 	ans = append(ans, value)
