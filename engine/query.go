@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/czcorpus/cnc-gokit/collections"
@@ -40,9 +39,10 @@ type Candidate struct {
 // note: the lifecycle of the instance
 // is "per request"
 type CollDatabase struct {
-	db       *pgxpool.Pool
-	corpusID string
-	ctx      context.Context
+	db          *pgxpool.Pool
+	useMatViews bool
+	corpusID    string
+	ctx         context.Context
 }
 
 func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int64, error) {
@@ -91,32 +91,6 @@ func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int
 }
 
 func (cdb *CollDatabase) GetChildCandidates(pLemma, pUpos, deprel string, minFreq int) ([]*Candidate, error) {
-	partialResults := make(chan []*Candidate)
-	wg := sync.WaitGroup{}
-	go func() {
-		for i := 0; i < 8; i++ {
-			wg.Add(1)
-			go func(chunkID int) {
-				defer wg.Done()
-				ans, err := cdb.getChildCandidatesForChunk(pLemma, pUpos, deprel, minFreq, chunkID)
-				if err != nil {
-					log.Error().Err(err).Msg("Failed to process") // TODO
-				}
-				partialResults <- ans
-			}(i)
-		}
-		wg.Wait()
-		close(partialResults)
-	}()
-
-	totalResult := make([]*Candidate, 0, 8*10)
-	for pr := range partialResults {
-		totalResult = append(totalResult, pr...)
-	}
-	return totalResult, nil // TODO err
-}
-
-func (cdb *CollDatabase) getChildCandidatesForChunk(pLemma, pUpos, deprel string, minFreq int, chunk int) ([]*Candidate, error) {
 	whereSQL := make([]string, 0, 4)
 	whereSQL = append(whereSQL, "p_lemma = @p_lemma", "freq >= @freq")
 	whereArgs := pgx.NamedArgs{}
@@ -139,13 +113,24 @@ func (cdb *CollDatabase) getChildCandidatesForChunk(pLemma, pUpos, deprel string
 		whereSQL = append(whereSQL, "p_upos = @p_upos")
 		whereArgs["p_upos"] = pUpos
 	}
-	sql := fmt.Sprintf(
-		"SELECT a.lemma, a.upos, a.freq, "+
-			"(SELECT SUM(freq) FROM intercorp_v13ud_cs_fcolls AS b "+
-			" WHERE b.lemma = a.lemma AND b.upos = a.upos AND b.deprel = a.deprel) "+
-			"FROM %s_fcolls AS a WHERE %s ",
-		cdb.corpusID, strings.Join(whereSQL, " AND "),
-	)
+	var sql string
+	if cdb.useMatViews {
+		sql = fmt.Sprintf(
+			"SELECT lemma, upos, freq, fy "+
+				"FROM %s_lemma_candidates "+
+				"WHERE %s ",
+			cdb.corpusID, strings.Join(whereSQL, " AND "),
+		)
+
+	} else {
+		sql = fmt.Sprintf(
+			"SELECT a.lemma, a.upos, a.freq, "+
+				"(SELECT SUM(freq) FROM %s_fcolls AS b "+
+				" WHERE b.lemma = a.lemma AND b.upos = a.upos AND b.deprel = a.deprel) "+
+				"FROM %s_fcolls AS a WHERE %s ",
+			cdb.corpusID, cdb.corpusID, strings.Join(whereSQL, " AND "),
+		)
+	}
 	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT child candidates")
 	t0 := time.Now()
 	rows, err := cdb.db.Query(cdb.ctx, sql, whereArgs)
@@ -155,14 +140,14 @@ func (cdb *CollDatabase) getChildCandidatesForChunk(pLemma, pUpos, deprel string
 	ans := make([]*Candidate, 0, 100)
 	for rows.Next() {
 		item := &Candidate{}
-		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.FreqXY)
+		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.FreqY)
 		if err != nil {
 			return ans, err
 		}
 		ans = append(ans, item)
 	}
-	log.Debug().Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT child candidates)")
-	return ans, nil
+	log.Debug().Err(rows.Err()).Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT child candidates)")
+	return ans, rows.Err()
 }
 
 func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq int) ([]*Candidate, error) {
@@ -188,13 +173,24 @@ func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq
 		whereSQL = append(whereSQL, "upos = @upos")
 		whereArgs["upos"] = upos
 	}
-	sql := fmt.Sprintf(
-		"SELECT p_lemma, p_upos, freq, "+
-			"(SELECT SUM(freq) FROM intercorp_v13ud_cs_fcolls AS b "+
-			" WHERE b.p_lemma = a.p_lemma AND b.p_upos = a.p_upos AND b.deprel = a.deprel) "+
-			"FROM %s_fcolls AS a WHERE %s ",
-		cdb.corpusID, strings.Join(whereSQL, " AND "),
-	)
+	var sql string
+	if cdb.useMatViews {
+		sql = fmt.Sprintf(
+			"SELECT p_lemma, p_upos, freq, fy "+
+				"FROM %s_p_lemma_candidates "+
+				"WHERE %s ",
+			cdb.corpusID, strings.Join(whereSQL, " AND "),
+		)
+
+	} else {
+		sql = fmt.Sprintf(
+			"SELECT p_lemma, p_upos, freq, "+
+				"(SELECT SUM(freq) FROM %s_fcolls AS b "+
+				" WHERE b.p_lemma = a.p_lemma AND b.p_upos = a.p_upos AND b.deprel = a.deprel) "+
+				"FROM %s_fcolls AS a WHERE %s ",
+			cdb.corpusID, cdb.corpusID, strings.Join(whereSQL, " AND "),
+		)
+	}
 	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT parent candidates")
 	t0 := time.Now()
 	rows, err := cdb.db.Query(cdb.ctx, sql, whereArgs)
@@ -210,14 +206,15 @@ func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq
 		}
 		ans = append(ans, item)
 	}
-	log.Debug().Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT parent candidates)")
-	return ans, nil
+	log.Debug().Err(rows.Err()).Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT parent candidates)")
+	return ans, rows.Err()
 }
 
-func NewCollDatabase(db *pgxpool.Pool, corpusID string) *CollDatabase {
+func NewCollDatabase(db *pgxpool.Pool, corpusID string, useMatViews bool) *CollDatabase {
 	return &CollDatabase{
-		db:       db,
-		corpusID: corpusID,
-		ctx:      context.Background(),
+		db:          db,
+		useMatViews: useMatViews,
+		corpusID:    corpusID,
+		ctx:         context.Background(),
 	}
 }

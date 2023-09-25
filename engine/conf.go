@@ -44,9 +44,14 @@ func (cp CorporaConf) GetCorpusProps(corpusID string) *CorpusProps {
 }
 
 type CorpusProps struct {
-	Name   string      `json:"name"`
-	Size   int64       `json:"size"`
-	Syntax SyntaxProps `json:"syntax"`
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	// HasMaterializedViews if true then scollex will use queries
+	// targeting those views for the corpus to provide better performance.
+	// This is highly recommended (see scripts/schema.sql for
+	// the views' definitions)
+	HasMaterializedViews bool        `json:"hasMaterializedViews"`
+	Syntax               SyntaxProps `json:"syntax"`
 }
 
 func (conf *CorpusProps) ValidateAndDefaults(confContext string) error {

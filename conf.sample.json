@@ -18,6 +18,7 @@
         {
             "name": "intercorp_v13ud_cs",
             "size": 259002702,
+            "hasMaterializedViews": true,
             "syntax": {
                 "parentIdxAttr": {"name": "parent", "verticalCol": 10},
                 "lemmaAttr": {"name": "lemma", "verticalCol": 3},
@@ -35,6 +36,7 @@
         {
             "name": "intercorp_v13ud_en",
             "size": 161867949,
+            "hasMaterializedViews": false,
             "syntax": {
                 "parentIdxAttr": {"name": "parent", "verticalCol": 8},
                 "lemmaAttr": {"name": "lemma", "verticalCol": 3},

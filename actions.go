@@ -51,7 +51,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="nmod" & p_upos="NOUN"]
-	cdb := engine.NewCollDatabase(a.db, corpusID)
+	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "NOUN", "nmod")
 	if err != nil {
@@ -110,7 +110,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 		return
 	}
 	// [p_lemma="team" & deprel="nmod" & upos="NOUN"]
-	cdb := engine.NewCollDatabase(a.db, corpusID)
+	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
 
 	fx, err := cdb.GetFreq("", "NOUN", w.V, w.PoS, "nmod")
 
@@ -171,7 +171,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="nsubj" & p_upos="VERB"]
-	cdb := engine.NewCollDatabase(a.db, corpusID)
+	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "VERB", "nsubj")
 	if err != nil {
@@ -231,7 +231,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="obj|iobj" & p_upos="VERB"]
-	cdb := engine.NewCollDatabase(a.db, corpusID)
+	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "VERB", "obj|iobj")
 	if err != nil {
