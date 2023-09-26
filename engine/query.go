@@ -52,10 +52,10 @@ func (cdb *CollDatabase) TableName() string {
 
 func (cdb *CollDatabase) TestTableReady() error {
 	tx, err := cdb.db.Begin(cdb.ctx)
-	defer tx.Rollback(cdb.ctx)
 	if err != nil {
 		return err
 	}
+	defer tx.Rollback(cdb.ctx)
 	cmd, err := cdb.db.Exec(
 		cdb.ctx, fmt.Sprintf("INSERT INTO %s_fcolls (id) VALUES (-1)", cdb.corpusID))
 	if err != nil {
