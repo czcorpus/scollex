@@ -195,7 +195,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 	if deprel != "" {
 		deprelParsed := strings.Split(deprel, "|")
 		deprelArgs = make([]any, len(deprelParsed))
-		deprelSQL := make([]string, len(deprelParsed))
+		deprelSQL = make([]string, len(deprelParsed))
 		for i, dp := range deprelParsed {
 			deprelSQL[i] = "deprel = ?"
 			deprelArgs[i] = dp
@@ -206,7 +206,6 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 	} else {
 		deprelSQL = []string{"1 = 1"}
 	}
-
 	if upos != "" {
 		whereSQL = append(whereSQL, "p_upos = ?")
 		whereArgs = append(whereArgs, upos)
@@ -236,7 +235,6 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 				"WHERE lemma = ? AND upos = ? AND %s ",
 			cdb.corpusID, strings.Join(deprelSQL, " OR "))
 		whereArgs := append([]any{item.Lemma, item.Upos}, deprelArgs...)
-		log.Debug().Str("sql", sql1).Any("args", whereArgs).Msg("going to SELECT parent candidates")
 		rows2 := cdb.db.QueryRowContext(
 			cdb.ctx, sql2, whereArgs...)
 		var fy int64
