@@ -23,6 +23,10 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
+const (
+	defaultWordColumnSize = 300
+)
+
 func (cdb *CollDatabase) dropCollsTable(tx *sql.Tx) error {
 	_, err := tx.Exec(fmt.Sprintf(`DROP TABLE IF EXISTS %s_fcolls`, cdb.corpusID))
 	return err
@@ -32,13 +36,13 @@ func (cdb *CollDatabase) createCollsTable(tx *sql.Tx, vcLen int) error {
 	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE %s_fcolls (
 		id int(11) NOT NULL AUTO_INCREMENT,
 		lemma varchar(%d) NOT NULL,
-		upos varchar(%d) NOT NULL,
+		upos varchar(50) NOT NULL,
 		p_lemma varchar(%d) NOT NULL,
-		p_upos varchar(%d) NOT NULL,
-		deprel varchar(%d) NOT NULL,
+		p_upos varchar(50) NOT NULL,
+		deprel varchar(50) NOT NULL,
 		freq int(11) NOT NULL,
 		PRIMARY KEY (id)
-	  )`, cdb.corpusID, vcLen, vcLen, vcLen, vcLen, vcLen))
+	  )`, cdb.corpusID, vcLen, vcLen))
 
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_fcolls: %w", cdb.corpusID, err)
@@ -58,11 +62,11 @@ func (cdb *CollDatabase) createParentSumsTable(tx *sql.Tx, vcLen int) error {
 	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE %s_parent_sums (
 		id int(11) NOT NULL AUTO_INCREMENT,
 		p_lemma varchar(%d) NOT NULL,
-		p_upos varchar(%d) NOT NULL,
-		deprel varchar(%d) NOT NULL,
+		p_upos varchar(50) NOT NULL,
+		deprel varchar(50) NOT NULL,
 		freq int(11) NOT NULL,
 		PRIMARY KEY (id)
-	  )`, cdb.corpusID, vcLen, vcLen, vcLen))
+	  )`, cdb.corpusID, vcLen))
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_parent_sums: %w", cdb.corpusID, err)
 	}
@@ -81,11 +85,11 @@ func (cdb *CollDatabase) createChildSumsTable(tx *sql.Tx, vcLen int) error {
 	_, err := tx.Exec(fmt.Sprintf(`CREATE TABLE %s_child_sums (
 		id int(11) NOT NULL AUTO_INCREMENT,
 		lemma varchar(%d) NOT NULL,
-		upos varchar(%d) NOT NULL,
-		deprel varchar(%d) NOT NULL,
+		upos varchar(50) NOT NULL,
+		deprel varchar(50) NOT NULL,
 		freq int(11) NOT NULL,
 		PRIMARY KEY (id)
-	)`, cdb.corpusID, vcLen, vcLen, vcLen))
+	)`, cdb.corpusID, vcLen))
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_child_sums: %w", cdb.corpusID, err)
 	}
@@ -116,17 +120,17 @@ func (cdb *CollDatabase) InitializeDB(db *sql.DB, force bool) error {
 		}
 	}
 	log.Info().Msg("creating tables")
-	err = cdb.createCollsTable(tx, 100)
+	err = cdb.createCollsTable(tx, defaultWordColumnSize)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	err = cdb.createParentSumsTable(tx, 100)
+	err = cdb.createParentSumsTable(tx, defaultWordColumnSize)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
-	err = cdb.createChildSumsTable(tx, 100)
+	err = cdb.createChildSumsTable(tx, defaultWordColumnSize)
 	if err != nil {
 		tx.Rollback()
 		return err
