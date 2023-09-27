@@ -18,13 +18,12 @@ package engine
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/czcorpus/cnc-gokit/collections"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 	"github.com/tomachalek/vertigo/v5"
 )
@@ -32,6 +31,33 @@ import (
 const (
 	bulkInsertChunkSize = 10000
 )
+
+type FyItem struct {
+	Lemma  string
+	Upos   string
+	Deprel string
+	Freq   int64
+}
+
+type FyTable map[string]*FyItem
+
+func (table FyTable) mkKey(lemma, upos, deprel string) string {
+	return fmt.Sprintf("%s:%s:%s", lemma, upos, deprel)
+}
+
+func (table FyTable) Add(lemma, upos, deprel string, val int64) {
+	key := table.mkKey(lemma, upos, deprel)
+	v, ok := table[key]
+	if !ok {
+		v = &FyItem{
+			Lemma:  lemma,
+			Upos:   upos,
+			Deprel: deprel,
+		}
+		table[key] = v
+	}
+	v.Freq += val
+}
 
 type CTItem struct {
 	Lemma  string
@@ -65,10 +91,12 @@ func (table CounterTable) Add(lemma, upos, pLemma, pUpos, deprel string, val int
 }
 
 type VertProcessor struct {
-	DeprelCol   int
-	DeprelTypes []string
-	conf        *SyntaxProps
-	Table       CounterTable
+	DeprelCol    int
+	DeprelTypes  []string
+	conf         *SyntaxProps
+	Table        CounterTable
+	ParentCounts FyTable
+	ChildCounts  FyTable
 }
 
 func expandDeprelMultivalue(value string) []string {
@@ -111,6 +139,8 @@ func (vp *VertProcessor) ProcToken(token *vertigo.Token, line int, err error) er
 	for _, deprel := range expandDeprelMultivalue(deprelTmp) {
 		if collections.SliceContains(vp.DeprelTypes, deprel) {
 			vp.Table.Add(lemma, upos, pLemma, pUpos, deprel, 1)
+			vp.ParentCounts.Add(pLemma, pUpos, deprel, 1)
+			vp.ChildCounts.Add(lemma, upos, deprel, 1)
 		}
 	}
 	//useFirstNonWordPosAttr(tokenAttrs[0])
@@ -126,15 +156,135 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 	return nil
 }
 
-// TODO: update intercorp_v13ud_cs_fcolls set chunk = (FLOOR( 1 + RAND( ) *32))
+func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
+	var i int
+	args := make([]any, 0, bulkInsertChunkSize*6)
+	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
-func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool) error {
+	for _, v := range table {
+		if i == bulkInsertChunkSize {
+			sql := fmt.Sprintf(
+				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+				corpusID, strings.Join(insertPlaceholders, ", "))
+			_, err := tx.Exec(sql, args...)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			args = make([]any, 0, bulkInsertChunkSize*6)
+			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
+			i = 0
+			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
+		}
+
+		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?)")
+		i++
+	}
+
+	if len(args) > 0 {
+		sql := fmt.Sprintf(
+			"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+			corpusID, strings.Join(insertPlaceholders, ", "))
+		_, err := tx.Exec(sql, args...)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		log.Debug().Int("items", len(insertPlaceholders)).Msg("written Fxy bulk into database")
+	}
+	return nil
+}
+
+func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
+	var i int
+	args := make([]any, 0, bulkInsertChunkSize*6)
+	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
+
+	for _, v := range table {
+		if i == bulkInsertChunkSize {
+			sql := fmt.Sprintf(
+				"INSERT INTO %s_parent_sums (p_lemma, p_upos, deprel, freq) VALUES %s",
+				corpusID, strings.Join(insertPlaceholders, ", "))
+			_, err := tx.Exec(sql, args...)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			args = make([]any, 0, bulkInsertChunkSize*6)
+			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
+			i = 0
+			log.Debug().Int("items", bulkInsertChunkSize).Msg("written parent Fy bulk into database")
+		}
+
+		args = append(args, v.Lemma, v.Upos, v.Deprel, v.Freq)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?)")
+		i++
+	}
+
+	if len(args) > 0 {
+		sql := fmt.Sprintf(
+			"INSERT INTO %s_parent_sums (p_lemma, p_upos, deprel, freq) VALUES %s",
+			corpusID, strings.Join(insertPlaceholders, ", "))
+		_, err := tx.Exec(sql, args...)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		log.Debug().Int("items", len(insertPlaceholders)).Msg("written parent Fy bulk into database")
+	}
+	return nil
+}
+
+func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
+	var i int
+	args := make([]any, 0, bulkInsertChunkSize*6)
+	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
+
+	for _, v := range table {
+		if i == bulkInsertChunkSize {
+			sql := fmt.Sprintf(
+				"INSERT INTO %s_child_sums (lemma, upos, deprel, freq) VALUES %s",
+				corpusID, strings.Join(insertPlaceholders, ", "))
+			_, err := tx.Exec(sql, args...)
+			if err != nil {
+				tx.Rollback()
+				return err
+			}
+			args = make([]any, 0, bulkInsertChunkSize*6)
+			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
+			i = 0
+			log.Debug().Int("items", bulkInsertChunkSize).Msg("written child Fy bulk into database")
+		}
+
+		args = append(args, v.Lemma, v.Upos, v.Deprel, v.Freq)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?)")
+		i++
+	}
+
+	if len(args) > 0 {
+		sql := fmt.Sprintf(
+			"INSERT INTO %s_child_sums (lemma, upos, deprel, freq) VALUES %s",
+			corpusID, strings.Join(insertPlaceholders, ", "))
+		_, err := tx.Exec(sql, args...)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		log.Debug().Int("items", len(insertPlaceholders)).Msg("written child Fy bulk into database")
+	}
+	return nil
+}
+
+func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
 	pc := &vertigo.ParserConf{
 		InputFilePath:         vertPath,
 		Encoding:              "utf-8",
 		StructAttrAccumulator: "comb",
 	}
 	table := make(CounterTable)
+	parentSumTable := make(FyTable)
+	childSumTable := make(FyTable)
 	proc := &VertProcessor{
 		DeprelTypes: expandDeprelMultivalues(
 			[]string{
@@ -143,8 +293,10 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool
 				conf.NounObjectValue,
 			},
 		),
-		conf:  conf,
-		Table: table,
+		conf:         conf,
+		Table:        table,
+		ParentCounts: parentSumTable,
+		ChildCounts:  childSumTable,
 	}
 	err := vertigo.ParseVerticalFile(pc, proc)
 	if err != nil {
@@ -155,63 +307,35 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool
 
 	ctx := context.Background()
 
-	tx, err := db.Begin(ctx)
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 
-	_, err = db.Exec(ctx, fmt.Sprintf("DELETE FROM %s_fcolls", corpusID))
+	_, err = db.ExecContext(ctx, fmt.Sprintf("DELETE FROM %s_fcolls", corpusID))
 	if err != nil {
 		return err
 	}
 
-	i := 0
-	args := make([][]any, 0, bulkInsertChunkSize)
-	cols := []string{"lemma", "upos", "p_lemma", "p_upos", "deprel", "freq"}
-
-	log.Info().Msg("writing data into database")
 	t0 := time.Now()
 
-	for _, v := range table {
-		if i == bulkInsertChunkSize {
-			copyCount, err := db.CopyFrom(
-				ctx,
-				pgx.Identifier{fmt.Sprintf("%s_fcolls", corpusID)},
-				cols,
-				pgx.CopyFromRows(args),
-			)
-			if err != nil {
-				tx.Rollback(ctx)
-				return err
-			}
-			args = make([][]any, 0, bulkInsertChunkSize)
-			i = 0
-			log.Debug().Int64("items", copyCount).Msg("written bulk into database")
-		}
-
-		args = append(args, []any{v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq})
-		i++
+	if err := writeFxy(tx, table, corpusID); err != nil {
+		return err
+	}
+	if err := writeChildren(tx, childSumTable, corpusID); err != nil {
+		return err
+	}
+	if err := writeParents(tx, parentSumTable, corpusID); err != nil {
+		return err
 	}
 
-	if len(args) > 0 {
-		copyCount, err := db.CopyFrom(
-			ctx,
-			pgx.Identifier{fmt.Sprintf("%s_fcolls", corpusID)},
-			cols,
-			pgx.CopyFromRows(args),
-		)
-		if err != nil {
-			tx.Rollback(ctx)
-			return err
-		}
-		log.Debug().Int64("items", copyCount).Msg("written bulk into database")
-	}
-	err = tx.Commit(ctx)
+	log.Info().Msg("writing fxy data into database")
+	err = tx.Commit()
 	log.Info().Float64("durationSec", time.Since(t0).Seconds()).Msg("...writing done")
 	return err
 }
 
-func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *pgxpool.Pool) error {
+func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
 	return runForDeprel(
 		corpusID,
 		vertPath,

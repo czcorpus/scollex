@@ -17,21 +17,22 @@
 package main
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"net/http"
 	"sort"
 
+	"github.com/czcorpus/cnc-gokit/unireq"
 	"github.com/czcorpus/cnc-gokit/uniresp"
 	"github.com/czcorpus/scollex/cql"
 	"github.com/czcorpus/scollex/engine"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type Actions struct {
 	corpora *engine.CorporaConf
-	db      *pgxpool.Pool
+	db      *sql.DB
 }
 
 func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
@@ -44,6 +45,10 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 		)
 		return
 	}
+	maxItems, ok := unireq.GetURLIntArgOrFail(ctx, "maxItems", 10)
+	if !ok {
+		return
+	}
 	corpusID := ctx.Param("corpusId")
 	corpusConf := a.corpora.GetCorpusProps(corpusID)
 	if corpusConf == nil {
@@ -51,7 +56,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="nmod" & p_upos="NOUN"]
-	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
+	cdb := engine.NewCollDatabase(a.db, corpusID)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "NOUN", "nmod")
 	if err != nil {
@@ -59,7 +64,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 		return
 	}
 
-	candidates, err := cdb.GetParentCandidates(w.V, w.PoS, "nmod", engine.CandidatesFreqLimit)
+	candidates, err := cdb.GetCollCandidatesOfChild(w.V, w.PoS, "nmod", engine.CandidatesFreqLimit)
 	if err != nil {
 		uniresp.RespondWithErrorJSON(ctx, err, http.StatusInternalServerError)
 		return
@@ -67,6 +72,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 
 	result := make(engine.FreqDistribItemList, len(candidates))
 	for i, cand := range candidates {
+
 		item := &engine.FreqDistribItem{
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
@@ -81,7 +87,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 			return result[j].CollWeight < result[i].CollWeight
 		},
 	)
-
+	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
 		CorpusSize:       corpusConf.Size,
@@ -103,6 +109,10 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 		)
 		return
 	}
+	maxItems, ok := unireq.GetURLIntArgOrFail(ctx, "maxItems", 10)
+	if !ok {
+		return
+	}
 	corpusID := ctx.Param("corpusId")
 	corpusConf := a.corpora.GetCorpusProps(corpusID)
 	if corpusConf == nil {
@@ -110,7 +120,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 		return
 	}
 	// [p_lemma="team" & deprel="nmod" & upos="NOUN"]
-	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
+	cdb := engine.NewCollDatabase(a.db, corpusID)
 
 	fx, err := cdb.GetFreq("", "NOUN", w.V, w.PoS, "nmod")
 
@@ -119,7 +129,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 		return
 	}
 
-	candidates, err := cdb.GetChildCandidates(w.V, w.PoS, "nmod", engine.CandidatesFreqLimit)
+	candidates, err := cdb.GetCollCandidatesOfParent(w.V, w.PoS, "nmod", engine.CandidatesFreqLimit)
 	if err != nil {
 		uniresp.RespondWithErrorJSON(ctx, err, http.StatusInternalServerError)
 		return
@@ -127,6 +137,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 
 	result := make(engine.FreqDistribItemList, len(candidates))
 	for i, cand := range candidates {
+
 		item := &engine.FreqDistribItem{
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
@@ -141,7 +152,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 			return result[j].CollWeight < result[i].CollWeight
 		},
 	)
-
+	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
 		CorpusSize:       corpusConf.Size,
@@ -164,6 +175,10 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 		)
 		return
 	}
+	maxItems, ok := unireq.GetURLIntArgOrFail(ctx, "maxItems", 10)
+	if !ok {
+		return
+	}
 	corpusID := ctx.Param("corpusId")
 	corpusConf := a.corpora.GetCorpusProps(corpusID)
 	if corpusConf == nil {
@@ -171,7 +186,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="nsubj" & p_upos="VERB"]
-	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
+	cdb := engine.NewCollDatabase(a.db, corpusID)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "VERB", "nsubj")
 	if err != nil {
@@ -179,7 +194,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 		return
 	}
 
-	candidates, err := cdb.GetParentCandidates(w.V, w.PoS, "nsubj", engine.CandidatesFreqLimit)
+	candidates, err := cdb.GetCollCandidatesOfChild(w.V, w.PoS, "nsubj", engine.CandidatesFreqLimit)
 	if err != nil {
 		uniresp.RespondWithErrorJSON(ctx, err, http.StatusInternalServerError)
 		return
@@ -187,6 +202,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 
 	result := make(engine.FreqDistribItemList, len(candidates))
 	for i, cand := range candidates {
+
 		item := &engine.FreqDistribItem{
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
@@ -201,7 +217,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 			return result[j].CollWeight < result[i].CollWeight
 		},
 	)
-
+	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
 		CorpusSize:       corpusConf.Size,
@@ -224,6 +240,10 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 		)
 		return
 	}
+	maxItems, ok := unireq.GetURLIntArgOrFail(ctx, "maxItems", 10)
+	if !ok {
+		return
+	}
 	corpusID := ctx.Param("corpusId")
 	corpusConf := a.corpora.GetCorpusProps(corpusID)
 	if corpusConf == nil {
@@ -231,7 +251,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 		return
 	}
 	// [lemma="team" & deprel="obj|iobj" & p_upos="VERB"]
-	cdb := engine.NewCollDatabase(a.db, corpusID, corpusConf.HasMaterializedViews)
+	cdb := engine.NewCollDatabase(a.db, corpusID)
 
 	fx, err := cdb.GetFreq(w.V, w.PoS, "", "VERB", "obj|iobj")
 	if err != nil {
@@ -239,7 +259,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 		return
 	}
 
-	candidates, err := cdb.GetParentCandidates(w.V, w.PoS, "obj|iobj", engine.CandidatesFreqLimit)
+	candidates, err := cdb.GetCollCandidatesOfChild(w.V, w.PoS, "obj|iobj", engine.CandidatesFreqLimit)
 	if err != nil {
 		uniresp.RespondWithErrorJSON(ctx, err, http.StatusInternalServerError)
 		return
@@ -247,6 +267,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 
 	result := make(engine.FreqDistribItemList, len(candidates))
 	for i, cand := range candidates {
+
 		item := &engine.FreqDistribItem{
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
@@ -261,7 +282,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 			return result[j].CollWeight < result[i].CollWeight
 		},
 	)
-
+	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
 		CorpusSize:       corpusConf.Size,
@@ -275,7 +296,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 
 func NewActions(
 	corpora *engine.CorporaConf,
-	db *pgxpool.Pool,
+	db *sql.DB,
 ) *Actions {
 	return &Actions{
 		corpora: corpora,

@@ -23,9 +23,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/czcorpus/cnc-gokit/collections"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -40,10 +37,9 @@ type Candidate struct {
 // note: the lifecycle of the instance
 // is "per request"
 type CollDatabase struct {
-	db          *pgxpool.Pool
-	useMatViews bool
-	corpusID    string
-	ctx         context.Context
+	db       *sql.DB
+	corpusID string
+	ctx      context.Context
 }
 
 func (cdb *CollDatabase) TableName() string {
@@ -51,25 +47,21 @@ func (cdb *CollDatabase) TableName() string {
 }
 
 func (cdb *CollDatabase) TestTableReady() error {
-	tx, err := cdb.db.Begin(cdb.ctx)
+	tx, err := cdb.db.BeginTx(cdb.ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(cdb.ctx)
-	cmd, err := cdb.db.Exec(
-		cdb.ctx, fmt.Sprintf("INSERT INTO %s_fcolls (id) VALUES (-1)", cdb.corpusID))
+	defer tx.Rollback()
+	_, err = cdb.db.ExecContext(
+		cdb.ctx, fmt.Sprintf("INSERT IGNORE INTO %s_fcolls (id) VALUES (-1)", cdb.corpusID))
 	if err != nil {
 		return err
 	}
-	if cmd.RowsAffected() != 1 {
-		return fmt.Errorf(
-			"problem inserting testing row - num affected rows: %d", cmd.RowsAffected())
-	}
-	row := cdb.db.QueryRow(
-		cdb.ctx, fmt.Sprintf("SELECT id FROM %s_fcolls where id = $1", cdb.corpusID), -1)
+	row := cdb.db.QueryRowContext(
+		cdb.ctx, fmt.Sprintf("SELECT id FROM %s_fcolls where id = ?", cdb.corpusID), -1)
 	var v sql.NullInt64
 	err = row.Scan(&v)
-	if err == pgx.ErrNoRows {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 	return err
@@ -78,39 +70,39 @@ func (cdb *CollDatabase) TestTableReady() error {
 func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int64, error) {
 
 	whereSQL := make([]string, 0, 4)
-	whereArgs := pgx.NamedArgs{}
+	whereArgs := make([]any, 0, 10)
 	if deprel != "" {
 		deprelParsed := strings.Split(deprel, "|")
-		deprelArgs := pgx.NamedArgs{}
+		deprelArgs := make([]any, len(deprelParsed))
 		deprelSql := make([]string, len(deprelParsed))
 		for i, dp := range deprelParsed {
-			deprelSql[i] = fmt.Sprintf("deprel = @deprel_%d", i)
-			deprelArgs[fmt.Sprintf("deprel_%d", i)] = dp
+			deprelSql[i] = "deprel = ?"
+			deprelArgs[i] = dp
 		}
 		whereSQL = append(whereSQL, fmt.Sprintf("(%s)", strings.Join(deprelSql, " OR ")))
-		collections.MapUpdate(whereArgs, deprelArgs)
+		whereArgs = append(whereArgs, deprelArgs...)
 	}
 	if lemma != "" {
-		whereSQL = append(whereSQL, "lemma = @lemma")
-		whereArgs["lemma"] = lemma
+		whereSQL = append(whereSQL, "lemma = ?")
+		whereArgs = append(whereArgs, lemma)
 	}
 	if upos != "" {
-		whereSQL = append(whereSQL, "upos = @upos")
-		whereArgs["upos"] = upos
+		whereSQL = append(whereSQL, "upos = ?")
+		whereArgs = append(whereArgs, upos)
 	}
 	if pLemma != "" {
-		whereSQL = append(whereSQL, "p_lemma = @p_lemma")
-		whereArgs["p_lemma"] = pLemma
+		whereSQL = append(whereSQL, "p_lemma = ?")
+		whereArgs = append(whereArgs, pLemma)
 	}
 	if pUpos != "" {
-		whereSQL = append(whereSQL, "p_upos = @p_upos")
-		whereArgs["p_upos"] = pUpos
+		whereSQL = append(whereSQL, "p_upos = ?")
+		whereArgs = append(whereArgs, pUpos)
 	}
 
 	sql := fmt.Sprintf("SELECT SUM(freq) FROM %s_fcolls WHERE %s", cdb.corpusID, strings.Join(whereSQL, " AND "))
 	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT cumulative freq.")
 	t0 := time.Now()
-	row := cdb.db.QueryRow(cdb.ctx, sql, whereArgs)
+	row := cdb.db.QueryRowContext(cdb.ctx, sql, whereArgs...)
 	var ans int64
 	err := row.Scan(&ans)
 	if err != nil {
@@ -120,131 +112,150 @@ func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int
 	return ans, nil
 }
 
-func (cdb *CollDatabase) GetChildCandidates(pLemma, pUpos, deprel string, minFreq int) ([]*Candidate, error) {
+// GetCollCandidatesOfChild provides collocation candidates of a child
+func (cdb *CollDatabase) GetCollCandidatesOfChild(lemma, upos, deprel string, minFreq int) ([]*Candidate, error) {
+	mkerr := func(err error) error { return fmt.Errorf("failed to get coll candidates of child: %w", err) }
 	whereSQL := make([]string, 0, 4)
-	whereSQL = append(whereSQL, "p_lemma = @p_lemma", "freq >= @freq")
-	whereArgs := pgx.NamedArgs{}
-	whereArgs["p_lemma"] = pLemma
-	whereArgs["freq"] = minFreq
+	whereSQL = append(whereSQL, "lemma = ?", "freq >= ?")
+	whereArgs := make([]any, 0, 4)
+	whereArgs = append(whereArgs, lemma, minFreq)
+	var deprelSQL []string
+	var deprelArgs []any
 
 	if deprel != "" {
 		deprelParsed := strings.Split(deprel, "|")
-		deprelArgs := pgx.NamedArgs{}
-		deprelSql := make([]string, len(deprelParsed))
+		deprelArgs = make([]any, len(deprelParsed))
+		deprelSQL = make([]string, len(deprelParsed))
 		for i, dp := range deprelParsed {
-			deprelSql[i] = fmt.Sprintf("deprel = @deprel_%d", i)
-			deprelArgs[fmt.Sprintf("deprel_%d", i)] = dp
+			deprelSQL[i] = "deprel = ?"
+			deprelArgs[i] = dp
 		}
-		whereSQL = append(whereSQL, fmt.Sprintf("(%s)", strings.Join(deprelSql, " OR ")))
-		collections.MapUpdate(whereArgs, deprelArgs)
-	}
-
-	if pUpos != "" {
-		whereSQL = append(whereSQL, "p_upos = @p_upos")
-		whereArgs["p_upos"] = pUpos
-	}
-	var sql string
-	if cdb.useMatViews {
-		sql = fmt.Sprintf(
-			"SELECT lemma, upos, freq, fy "+
-				"FROM %s_lemma_candidates "+
-				"WHERE %s ",
-			cdb.corpusID, strings.Join(whereSQL, " AND "),
-		)
+		whereSQL = append(whereSQL, fmt.Sprintf("(%s)", strings.Join(deprelSQL, " OR ")))
+		whereArgs = append(whereArgs, deprelArgs...)
 
 	} else {
-		sql = fmt.Sprintf(
-			"SELECT a.lemma, a.upos, a.freq, "+
-				"(SELECT SUM(freq) FROM %s_fcolls AS b "+
-				" WHERE b.lemma = a.lemma AND b.upos = a.upos AND b.deprel = a.deprel) "+
-				"FROM %s_fcolls AS a WHERE %s ",
-			cdb.corpusID, cdb.corpusID, strings.Join(whereSQL, " AND "),
-		)
-	}
-	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT child candidates")
-	t0 := time.Now()
-	rows, err := cdb.db.Query(cdb.ctx, sql, whereArgs)
-	if err != nil {
-		return []*Candidate{}, err
-	}
-	ans := make([]*Candidate, 0, 100)
-	for rows.Next() {
-		item := &Candidate{}
-		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.FreqY)
-		if err != nil {
-			return ans, err
-		}
-		ans = append(ans, item)
-	}
-	log.Debug().Err(rows.Err()).Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT child candidates)")
-	return ans, rows.Err()
-}
-
-func (cdb *CollDatabase) GetParentCandidates(lemma, upos, deprel string, minFreq int) ([]*Candidate, error) {
-	whereSQL := make([]string, 0, 4)
-	whereSQL = append(whereSQL, "lemma = @lemma", "freq >= @freq")
-	whereArgs := pgx.NamedArgs{}
-	whereArgs["lemma"] = lemma
-	whereArgs["freq"] = minFreq
-
-	if deprel != "" {
-		deprelParsed := strings.Split(deprel, "|")
-		deprelArgs := pgx.NamedArgs{}
-		deprelSql := make([]string, len(deprelParsed))
-		for i, dp := range deprelParsed {
-			deprelSql[i] = fmt.Sprintf("deprel = @deprel_%d", i)
-			deprelArgs[fmt.Sprintf("deprel_%d", i)] = dp
-		}
-		whereSQL = append(whereSQL, fmt.Sprintf("(%s)", strings.Join(deprelSql, " OR ")))
-		collections.MapUpdate(whereArgs, deprelArgs)
+		deprelSQL = []string{"1 = 1"}
 	}
 
 	if upos != "" {
-		whereSQL = append(whereSQL, "upos = @upos")
-		whereArgs["upos"] = upos
+		whereSQL = append(whereSQL, "upos = ?")
+		whereArgs = append(whereArgs, upos)
 	}
-	var sql string
-	if cdb.useMatViews {
-		sql = fmt.Sprintf(
-			"SELECT p_lemma, p_upos, freq, fy "+
-				"FROM %s_p_lemma_candidates "+
-				"WHERE %s ",
-			cdb.corpusID, strings.Join(whereSQL, " AND "),
-		)
 
-	} else {
-		sql = fmt.Sprintf(
-			"SELECT p_lemma, p_upos, freq, "+
-				"(SELECT SUM(freq) FROM %s_fcolls AS b "+
-				" WHERE b.p_lemma = a.p_lemma AND b.p_upos = a.p_upos AND b.deprel = a.deprel) "+
-				"FROM %s_fcolls AS a WHERE %s ",
-			cdb.corpusID, cdb.corpusID, strings.Join(whereSQL, " AND "),
-		)
-	}
-	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT parent candidates")
+	sql1 := fmt.Sprintf(
+		"SELECT p_lemma, p_upos, freq "+
+			"FROM %s_fcolls "+
+			"WHERE %s ",
+		cdb.corpusID, strings.Join(whereSQL, " AND "),
+	)
+	log.Debug().Str("sql", sql1).Any("args", whereArgs).Msg("going to SELECT child candidates")
 	t0 := time.Now()
-	rows, err := cdb.db.Query(cdb.ctx, sql, whereArgs)
+	rows, err := cdb.db.QueryContext(cdb.ctx, sql1, whereArgs...)
 	if err != nil {
-		return []*Candidate{}, err
+		return []*Candidate{}, mkerr(err)
 	}
 	ans := make([]*Candidate, 0, 100)
 	for rows.Next() {
 		item := &Candidate{}
-		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.FreqY)
+		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY)
 		if err != nil {
-			return ans, err
+			return ans, mkerr(err)
 		}
+
+		sql2 := fmt.Sprintf(
+			"SELECT SUM(freq) "+
+				"FROM %s_parent_sums "+
+				"WHERE p_lemma = ? AND p_upos = ? AND (%s)",
+			cdb.corpusID, strings.Join(deprelSQL, " OR "))
+		whereArgs := append([]any{item.Lemma, item.Upos}, deprelArgs...)
+		rows2 := cdb.db.QueryRowContext(
+			cdb.ctx, sql2, whereArgs...)
+		var fy int64
+		err = rows2.Scan(&fy)
+		if err != nil {
+			return []*Candidate{}, mkerr(err)
+		}
+		item.FreqY = fy
+		ans = append(ans, item)
+	}
+	log.Debug().Err(rows.Err()).Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT child candidates)")
+	return ans, nil
+}
+
+// GetCollCandidatesOfParent provides collocation candidates of a parent
+func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, minFreq int) ([]*Candidate, error) {
+	mkerr := func(err error) error { return fmt.Errorf("failed to get coll candidates of parent: %w", err) }
+	whereSQL := make([]string, 0, 4)
+	whereSQL = append(whereSQL, "p_lemma = ?", "freq >= ?")
+	whereArgs := make([]any, 0, 4)
+	whereArgs = append(whereArgs, lemma, minFreq)
+	var deprelSQL []string
+	var deprelArgs []any
+
+	if deprel != "" {
+		deprelParsed := strings.Split(deprel, "|")
+		deprelArgs = make([]any, len(deprelParsed))
+		deprelSQL := make([]string, len(deprelParsed))
+		for i, dp := range deprelParsed {
+			deprelSQL[i] = "deprel = ?"
+			deprelArgs[i] = dp
+		}
+		whereSQL = append(whereSQL, fmt.Sprintf("(%s)", strings.Join(deprelSQL, " OR ")))
+		whereArgs = append(whereArgs, deprelArgs...)
+
+	} else {
+		deprelSQL = []string{"1 = 1"}
+	}
+
+	if upos != "" {
+		whereSQL = append(whereSQL, "p_upos = ?")
+		whereArgs = append(whereArgs, upos)
+	}
+	sql1 := fmt.Sprintf(
+		"SELECT lemma, upos, freq "+
+			"FROM %s_fcolls "+
+			"WHERE %s ",
+		cdb.corpusID, strings.Join(whereSQL, " AND "),
+	)
+	log.Debug().Str("sql", sql1).Any("args", whereArgs).Msg("going to SELECT child candidates")
+	t0 := time.Now()
+	rows, err := cdb.db.QueryContext(cdb.ctx, sql1, whereArgs...)
+	if err != nil {
+		return []*Candidate{}, mkerr(err)
+	}
+	ans := make([]*Candidate, 0, 100)
+	for rows.Next() {
+		item := &Candidate{}
+		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY)
+		if err != nil {
+			return ans, mkerr(err)
+		}
+		sql2 := fmt.Sprintf(
+			"SELECT SUM(freq) "+
+				"FROM %s_child_sums "+
+				"WHERE lemma = ? AND upos = ? AND %s ",
+			cdb.corpusID, strings.Join(deprelSQL, " OR "))
+		whereArgs := append([]any{item.Lemma, item.Upos}, deprelArgs...)
+		log.Debug().Str("sql", sql1).Any("args", whereArgs).Msg("going to SELECT parent candidates")
+		rows2 := cdb.db.QueryRowContext(
+			cdb.ctx, sql2, whereArgs...)
+		var fy int64
+		err = rows2.Scan(&fy)
+		if err != nil {
+			return []*Candidate{}, mkerr(err)
+		}
+		item.FreqY = fy
+
 		ans = append(ans, item)
 	}
 	log.Debug().Err(rows.Err()).Float64("proctime", time.Since(t0).Seconds()).Msg(".... DONE (SELECT parent candidates)")
-	return ans, rows.Err()
+	return ans, nil
 }
 
-func NewCollDatabase(db *pgxpool.Pool, corpusID string, useMatViews bool) *CollDatabase {
+func NewCollDatabase(db *sql.DB, corpusID string) *CollDatabase {
 	return &CollDatabase{
-		db:          db,
-		useMatViews: useMatViews,
-		corpusID:    corpusID,
-		ctx:         context.Background(),
+		db:       db,
+		corpusID: corpusID,
+		ctx:      context.Background(),
 	}
 }
