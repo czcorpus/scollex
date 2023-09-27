@@ -17,16 +17,25 @@
 package engine
 
 import (
-	"context"
-	"fmt"
+	"database/sql"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/go-sql-driver/mysql"
 )
 
-func OpenConnection(conf *DBConf, ctx context.Context) (*pgxpool.Pool, error) {
-	dsn := fmt.Sprintf( // TODO  pool_max_conns=%d
-		"user=%s password=%s host=%s port=%d dbname=%s sslmode=disable",
-		conf.User, conf.Password, conf.Host, conf.Port, conf.Name,
-	)
-	return pgxpool.New(ctx, dsn)
+func Open(conf *DBConf) (*sql.DB, error) {
+	mconf := mysql.NewConfig()
+	mconf.Net = "tcp"
+	mconf.Addr = conf.Host
+	mconf.User = conf.User
+	mconf.Passwd = conf.Password
+	mconf.DBName = conf.Name
+	mconf.ParseTime = true
+	mconf.Loc = time.Local
+	mconf.Params = map[string]string{"autocommit": "true"}
+	db, err := sql.Open("mysql", mconf.FormatDSN())
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
 }

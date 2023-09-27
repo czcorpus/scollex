@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/http"
@@ -33,7 +34,6 @@ import (
 	"github.com/czcorpus/scollex/cnf"
 	"github.com/czcorpus/scollex/engine"
 	"github.com/gin-gonic/gin"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog/log"
 )
 
@@ -57,7 +57,7 @@ func runApiServer(
 	conf *cnf.Conf,
 	syscallChan chan os.Signal,
 	exitEvent chan os.Signal,
-	sqlDB *pgxpool.Pool,
+	sqlDB *sql.DB,
 ) {
 	if !conf.LogLevel.IsDebugMode() {
 		gin.SetMode(gin.ReleaseMode)
@@ -117,7 +117,7 @@ func main() {
 		GitCommit: gitCommit,
 	}
 
-	flag.Usage = func() {
+	generalUsage := func() {
 		fmt.Fprintf(os.Stderr, "SCollEx - a Syntactic Collocations explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\t%s [options] start [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] import [config.json]\n", filepath.Base(os.Args[0]))
@@ -125,53 +125,73 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\t%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
 	}
-	flag.Parse()
-	action := flag.Arg(0)
+
+	startCmd := flag.NewFlagSet("start", flag.ExitOnError)
+	startCmd.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage:\t%s [options] start [config.json]\n", filepath.Base(os.Args[0]))
+		startCmd.PrintDefaults()
+	}
+	importCmd := flag.NewFlagSet("import", flag.ExitOnError)
+	forceOverwriteTbl := importCmd.Bool("f", false, "Drop target tables in case they already exist")
+
+	action := os.Args[1]
 	if action == "version" {
 		fmt.Printf("scollex %s\nbuild date: %s\nlast commit: %s\n", version.Version, version.BuildDate, version.GitCommit)
 		return
 	}
-	conf := cnf.LoadConfig(flag.Arg(1))
-
-	if action == "test" {
-		cnf.ValidateAndDefaults(conf)
-		log.Info().Msg("config OK")
-		return
-
-	} else {
-		logging.SetupLogging(conf.LogFile, conf.LogLevel)
-	}
-	log.Info().Msg("Starting SCollEx")
-	cnf.ValidateAndDefaults(conf)
-	syscallChan := make(chan os.Signal, 1)
-	signal.Notify(syscallChan, os.Interrupt)
-	signal.Notify(syscallChan, syscall.SIGTERM)
-	exitEvent := make(chan os.Signal)
-
-	go func() {
-		evt := <-syscallChan
-		exitEvent <- evt
-		close(exitEvent)
-	}()
-
-	ctx := context.Background()
-	pgDB, err := engine.OpenConnection(conf.DB, ctx)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to open database connection")
-	}
 
 	switch action {
 	case "start":
-		runApiServer(conf, syscallChan, exitEvent, pgDB)
+		startCmd.Parse(os.Args[2:])
+		conf := cnf.LoadConfig(startCmd.Arg(0))
+
+		if action == "test" {
+			cnf.ValidateAndDefaults(conf)
+			log.Info().Msg("config OK")
+			return
+
+		} else {
+			logging.SetupLogging(conf.LogFile, conf.LogLevel)
+		}
+		log.Info().Msg("Starting SCollEx")
+		cnf.ValidateAndDefaults(conf)
+		syscallChan := make(chan os.Signal, 1)
+		signal.Notify(syscallChan, os.Interrupt)
+		signal.Notify(syscallChan, syscall.SIGTERM)
+		exitEvent := make(chan os.Signal)
+
+		go func() {
+			evt := <-syscallChan
+			exitEvent <- evt
+			close(exitEvent)
+		}()
+
+		sqlDB, err := engine.Open(conf.DB)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to open database connection")
+		}
+
+		runApiServer(conf, syscallChan, exitEvent, sqlDB)
 	case "import":
-		corpProps := conf.Corpora.GetCorpusProps(flag.Arg(2))
+		importCmd.Parse(os.Args[2:])
+		conf := cnf.LoadConfig(importCmd.Arg(0))
+		sqlDB, err := engine.Open(conf.DB)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to open database connection")
+		}
+
+		corpProps := conf.Corpora.GetCorpusProps(importCmd.Arg(1))
 		if corpProps == nil {
-			log.Fatal().Msgf("corpus %s not installed", flag.Arg(2))
+			log.Fatal().Msgf("corpus `%s` not installed", importCmd.Arg(1))
 			return
 		}
-		cdb := engine.NewCollDatabase(pgDB, flag.Arg(2), false)
+		cdb := engine.NewCollDatabase(sqlDB, importCmd.Arg(1))
+		err = cdb.InitializeDB(sqlDB, *forceOverwriteTbl)
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to initialize database tables")
+		}
 		log.Info().Msgf("Testing whether the table %s is ready", cdb.TableName())
-		err := cdb.TestTableReady()
+		err = cdb.TestTableReady()
 		if err != nil {
 			log.Fatal().
 				Err(err).
@@ -184,13 +204,13 @@ func main() {
 		} else {
 			log.Info().Msg("... table READY")
 		}
-		err = engine.RunPg(flag.Arg(2), flag.Arg(3), &corpProps.Syntax, pgDB)
+		err = engine.RunPg(importCmd.Arg(1), importCmd.Arg(2), &corpProps.Syntax, sqlDB)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to process")
 			return
 		}
 	default:
-		log.Fatal().Msgf("Unknown action %s", action)
+		generalUsage()
 	}
 
 }
