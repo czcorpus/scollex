@@ -120,7 +120,7 @@ func main() {
 	generalUsage := func() {
 		fmt.Fprintf(os.Stderr, "SCollEx - a Syntactic Collocations explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\t%s [options] start [config.json]\n", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "\t%s [options] import [config.json]\n", filepath.Base(os.Args[0]))
+		fmt.Fprintf(os.Stderr, "\t%s [options] import [config.json] [corpus ID] [path to vertical file]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] test [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
