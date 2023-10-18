@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -90,13 +91,33 @@ func (table CounterTable) Add(lemma, upos, pLemma, pUpos, deprel string, val int
 	v.Freq += val
 }
 
-type VertProcessor struct {
-	DeprelCol    int
-	DeprelTypes  []string
-	conf         *SyntaxProps
-	Table        CounterTable
-	ParentCounts FyTable
-	ChildCounts  FyTable
+type CoTItem struct {
+	Lemma   string
+	CoLemma string
+	Upos    string
+	CoUpos  string
+	Freq    int64
+}
+
+type CoOccurenceTable map[string]*CoTItem
+
+func (table CoOccurenceTable) mkKey(lemma, upos, coLemma, coUpos string) string {
+	return fmt.Sprintf("%s:%s::%s:%s", lemma, upos, coLemma, coUpos)
+}
+
+func (table CoOccurenceTable) Add(lemma, upos, coLemma, coUpos string, val int64) {
+	key := table.mkKey(lemma, upos, coLemma, coUpos)
+	v, ok := table[key]
+	if !ok {
+		v = &CoTItem{
+			Lemma:   lemma,
+			Upos:    upos,
+			CoLemma: coLemma,
+			CoUpos:  coUpos,
+		}
+		table[key] = v
+	}
+	v.Freq += val
 }
 
 func expandDeprelMultivalue(value string) []string {
@@ -120,6 +141,62 @@ func expandDeprelMultivalues(values []string) []string {
 		ans = append(ans, expandDeprelMultivalue(v)...)
 	}
 	return ans
+}
+
+type CoVertProcessor struct {
+	Span        int
+	Window      [][2]string
+	conf        *SyntaxProps
+	CoTable     CoOccurenceTable
+	TokenCounts FyTable
+}
+
+func (cvp *CoVertProcessor) ProcToken(token *vertigo.Token, line int, err error) error {
+	if err != nil {
+		return err
+	}
+	if len(token.Attrs) < 12 {
+		log.Error().Msgf("Too few token columns on line %d", line)
+		return nil
+	}
+	cvp.Window = append(cvp.Window, [2]string{
+		token.Attrs[cvp.conf.LemmaAttr.VerticalCol-1],
+		token.Attrs[cvp.conf.PosAttr.VerticalCol-1],
+	})
+	cvp.TokenCounts.Add(
+		token.Attrs[cvp.conf.LemmaAttr.VerticalCol-1],
+		token.Attrs[cvp.conf.PosAttr.VerticalCol-1],
+		"",
+		1,
+	)
+	if len(cvp.Window) == 2*cvp.Span+1 {
+		lemmaUpos := cvp.Window[cvp.Span]
+		for i, v := range cvp.Window {
+			if i != cvp.Span {
+				cvp.CoTable.Add(lemmaUpos[0], lemmaUpos[1], v[0], v[1], 1)
+			}
+		}
+		cvp.Window = cvp.Window[1:]
+	}
+
+	return nil
+}
+
+func (cvp *CoVertProcessor) ProcStruct(strc *vertigo.Structure, line int, err error) error {
+	return nil
+}
+
+func (cvp *CoVertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int, err error) error {
+	return nil
+}
+
+type VertProcessor struct {
+	DeprelCol    int
+	DeprelTypes  []string
+	conf         *SyntaxProps
+	Table        CounterTable
+	ParentCounts FyTable
+	ChildCounts  FyTable
 }
 
 func (vp *VertProcessor) ProcToken(token *vertigo.Token, line int, err error) error {
@@ -156,15 +233,15 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 	return nil
 }
 
-func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
+func writeFxy(tx *sql.Tx, table CounterTable, coTable CoOccurenceTable, countsTable FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*7)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
 		if i == bulkInsertChunkSize {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, logDice) VALUES %s",
 				corpusID, strings.Join(insertPlaceholders, ", "))
 			_, err := tx.Exec(sql, args...)
 			if err != nil {
@@ -177,8 +254,13 @@ func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
 		}
 
-		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq)
-		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?)")
+		xy := coTable[coTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
+		fx := countsTable[countsTable.mkKey(v.Lemma, v.Upos, "")]
+		fy := countsTable[countsTable.mkKey(v.PLemma, v.PUpos, "")]
+		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
+
+		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq, logDice)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?, ?)")
 		i++
 	}
 
@@ -276,7 +358,7 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 	return nil
 }
 
-func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
+func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
 	pc := &vertigo.ParserConf{
 		InputFilePath:         vertPath,
 		Encoding:              "utf-8",
@@ -303,6 +385,21 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 		return err
 	}
 
+	coTable := make(CoOccurenceTable)
+	tokenCounts := make(FyTable)
+	window := make([][2]string, 2*coOccSpan+1)
+	coProc := &CoVertProcessor{
+		Span:        coOccSpan,
+		conf:        conf,
+		CoTable:     coTable,
+		TokenCounts: tokenCounts,
+		Window:      window,
+	}
+	err = vertigo.ParseVerticalFile(pc, coProc)
+	if err != nil {
+		return err
+	}
+
 	log.Info().Int("size", len(table)).Msg("collocation table done")
 
 	ctx := context.Background()
@@ -319,7 +416,7 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 
 	t0 := time.Now()
 
-	if err := writeFxy(tx, table, corpusID); err != nil {
+	if err := writeFxy(tx, table, coTable, tokenCounts, corpusID); err != nil {
 		return err
 	}
 	if err := writeChildren(tx, childSumTable, corpusID); err != nil {
@@ -335,10 +432,11 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 	return err
 }
 
-func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
+func RunPg(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
 	return runForDeprel(
 		corpusID,
 		vertPath,
+		coOccSpan,
 		conf,
 		db,
 	)
