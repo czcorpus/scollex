@@ -233,15 +233,15 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 	return nil
 }
 
-func writeFxy(tx *sql.Tx, table CounterTable, coTable CoOccurenceTable, countsTable FyTable, corpusID string) error {
+func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*7)
+	args := make([]any, 0, bulkInsertChunkSize*6)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
 		if i == bulkInsertChunkSize {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, logDice) VALUES %s",
+				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
 				corpusID, strings.Join(insertPlaceholders, ", "))
 			_, err := tx.Exec(sql, args...)
 			if err != nil {
@@ -254,13 +254,8 @@ func writeFxy(tx *sql.Tx, table CounterTable, coTable CoOccurenceTable, countsTa
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
 		}
 
-		xy := coTable[coTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
-		fx := countsTable[countsTable.mkKey(v.Lemma, v.Upos, "")]
-		fy := countsTable[countsTable.mkKey(v.PLemma, v.PUpos, "")]
-		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
-
-		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq, logDice)
-		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?, ?)")
+		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?)")
 		i++
 	}
 
@@ -280,7 +275,7 @@ func writeFxy(tx *sql.Tx, table CounterTable, coTable CoOccurenceTable, countsTa
 
 func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*4)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
@@ -293,7 +288,7 @@ func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*4)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written parent Fy bulk into database")
@@ -320,7 +315,7 @@ func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 
 func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*4)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
@@ -333,7 +328,7 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*4)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written child Fy bulk into database")
@@ -355,6 +350,28 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 		}
 		log.Debug().Int("items", len(insertPlaceholders)).Msg("written child Fy bulk into database")
 	}
+	return nil
+}
+
+func updateCoOccurrences(tx *sql.Tx, table CoOccurenceTable, countsTable FyTable, corpusID string) error {
+	sql := fmt.Sprintf(
+		"UPDATE %s_fcolls SET co_occurrence_score = ? WHERE lemma = ? AND upos = ? AND p_lemma = ? AND p_upos = ?",
+		corpusID,
+	)
+
+	for _, v := range table {
+		xy := table[table.mkKey(v.Lemma, v.Upos, v.CoLemma, v.CoUpos)]
+		fx := countsTable[countsTable.mkKey(v.Lemma, v.Upos, "")]
+		fy := countsTable[countsTable.mkKey(v.CoLemma, v.CoUpos, "")]
+		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
+
+		_, err := tx.Exec(sql, logDice, v.Lemma, v.Upos, v.CoLemma, v.CoUpos)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -385,21 +402,6 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 		return err
 	}
 
-	coTable := make(CoOccurenceTable)
-	tokenCounts := make(FyTable)
-	window := make([][2]string, 2*coOccSpan+1)
-	coProc := &CoVertProcessor{
-		Span:        coOccSpan,
-		conf:        conf,
-		CoTable:     coTable,
-		TokenCounts: tokenCounts,
-		Window:      window,
-	}
-	err = vertigo.ParseVerticalFile(pc, coProc)
-	if err != nil {
-		return err
-	}
-
 	log.Info().Int("size", len(table)).Msg("collocation table done")
 
 	ctx := context.Background()
@@ -416,7 +418,7 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 
 	t0 := time.Now()
 
-	if err := writeFxy(tx, table, coTable, tokenCounts, corpusID); err != nil {
+	if err := writeFxy(tx, table, corpusID); err != nil {
 		return err
 	}
 	if err := writeChildren(tx, childSumTable, corpusID); err != nil {
@@ -428,8 +430,44 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 
 	log.Info().Msg("writing fxy data into database")
 	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
+	// freeing memory
+	proc = nil
+	table = nil
+	parentSumTable = nil
+	childSumTable = nil
+
+	coTable := make(CoOccurenceTable)
+	tokenCounts := make(FyTable)
+	window := make([][2]string, 2*coOccSpan+1)
+	coProc := &CoVertProcessor{
+		Span:        coOccSpan,
+		conf:        conf,
+		CoTable:     coTable,
+		TokenCounts: tokenCounts,
+		Window:      window,
+	}
+	err = vertigo.ParseVerticalFile(pc, coProc)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Int("size", len(table)).Msg("cooccurrence table done")
+
+	if err := updateCoOccurrences(tx, coTable, tokenCounts, corpusID); err != nil {
+		return err
+	}
+	log.Info().Msg("writing cooccurrence data into database")
+	err = tx.Commit()
+	if err != nil {
+		return err
+	}
+
 	log.Info().Float64("durationSec", time.Since(t0).Seconds()).Msg("...writing done")
-	return err
+	return nil
 }
 
 func RunPg(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {

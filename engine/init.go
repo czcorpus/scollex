@@ -41,7 +41,7 @@ func (cdb *CollDatabase) createCollsTable(tx *sql.Tx, vcLen int) error {
 		p_upos varchar(50) NOT NULL,
 		deprel varchar(50) NOT NULL,
 		freq int(11) NOT NULL,
-		logDice float NOT NULL,
+		co_occurrence_score float,
 		PRIMARY KEY (id)
 	  )`, cdb.corpusID, vcLen, vcLen))
 
