@@ -47,6 +47,23 @@ func (cdb *CollDatabase) createCollsTable(tx *sql.Tx, vcLen int) error {
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_fcolls: %w", cdb.corpusID, err)
 	}
+
+	idxName := fmt.Sprintf("%s_fcolls_lemma_idx", cdb.corpusID)
+	_, err = tx.Exec(
+		fmt.Sprintf("CREATE INDEX %s ON %s_fcolls(lemma)", idxName, cdb.corpusID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to CREATE index %s: %w", idxName, err)
+	}
+
+	idxName = fmt.Sprintf("%s_fcolls_p_lemma_idx", cdb.corpusID)
+	_, err = tx.Exec(
+		fmt.Sprintf("CREATE INDEX %s ON %s_fcolls(p_lemma)", idxName, cdb.corpusID),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to CREATE index %s: %w", idxName, err)
+	}
+
 	return nil
 }
 
@@ -70,6 +87,13 @@ func (cdb *CollDatabase) createParentSumsTable(tx *sql.Tx, vcLen int) error {
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_parent_sums: %w", cdb.corpusID, err)
 	}
+
+	idxName := fmt.Sprintf("%s_parent_sums_p_lemma_idx", cdb.corpusID)
+	_, err = tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s_parent_sums(p_lemma)", idxName, cdb.corpusID))
+	if err != nil {
+		return fmt.Errorf("failed to CREATE index %s: %w", idxName, err)
+	}
+
 	return nil
 }
 
@@ -93,6 +117,13 @@ func (cdb *CollDatabase) createChildSumsTable(tx *sql.Tx, vcLen int) error {
 	if err != nil {
 		return fmt.Errorf("failed to CREATE table %s_child_sums: %w", cdb.corpusID, err)
 	}
+
+	idxName := fmt.Sprintf("%s_child_sums_p_lemma_idx", cdb.corpusID)
+	_, err = tx.Exec(fmt.Sprintf("CREATE INDEX %s ON %s_child_sums(lemma)", idxName, cdb.corpusID))
+	if err != nil {
+		return fmt.Errorf("failed to CREATE index %s: %w", idxName, err)
+	}
+
 	return nil
 }
 
