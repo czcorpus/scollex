@@ -392,6 +392,7 @@ func updateCoOcc(tx *sql.Tx, table CoOccTable, countsTable FyTable, corpusID str
 		corpusID,
 	)
 
+	i := 0
 	for _, v := range table {
 		xy := table[table.mkKey(v.Lemma, v.Upos, v.CoLemma, v.CoUpos)]
 		fx := countsTable[countsTable.mkKey(v.Lemma, v.Upos, "")]
@@ -410,6 +411,11 @@ func updateCoOcc(tx *sql.Tx, table CoOccTable, countsTable FyTable, corpusID str
 		if err != nil {
 			tx.Rollback()
 			return err
+		}
+
+		i++
+		if i%1000 == 0 {
+			log.Debug().Msgf("Written %d lines", i)
 		}
 	}
 
