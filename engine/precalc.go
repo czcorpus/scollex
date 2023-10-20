@@ -30,7 +30,7 @@ import (
 )
 
 const (
-	bulkInsertChunkSize = 10000
+	bulkInsertChunkSize = 1000
 )
 
 type FyItem struct {
@@ -159,7 +159,7 @@ type CoVertProcessor struct {
 	Span        int
 	Window      [][2]string
 	conf        *SyntaxProps
-	CoTable     CoOccTable
+	CoOccTable  CoOccTable
 	TokenCounts FyTable
 }
 
@@ -173,20 +173,21 @@ func (cvp *CoVertProcessor) ProcToken(token *vertigo.Token, line int, err error)
 	}
 	lemma := token.Attrs[cvp.conf.LemmaAttr.VerticalCol-1]
 	upos := token.Attrs[cvp.conf.PosAttr.VerticalCol-1]
+	if cvp.TokenCounts.Has(lemma, upos, "") {
+		cvp.TokenCounts.Add(lemma, upos, "", 1)
+	}
+
 	if len(cvp.Window) == 2*cvp.Span+1 {
 		cvp.Window = append(cvp.Window[1:], [2]string{lemma, upos})
 	} else {
 		cvp.Window = append(cvp.Window, [2]string{lemma, upos})
 	}
 
-	if cvp.TokenCounts.Has(lemma, upos, "") {
-		cvp.TokenCounts.Add(lemma, upos, "", 1)
-	}
 	if len(cvp.Window) == 2*cvp.Span+1 {
-		lemmaUpos := cvp.Window[cvp.Span]
-		for i, v := range cvp.Window {
-			if i != cvp.Span && cvp.CoTable.Has(lemmaUpos[0], lemmaUpos[1], v[0], v[1]) {
-				cvp.CoTable.Add(lemmaUpos[0], lemmaUpos[1], v[0], v[1], 1)
+		middle := cvp.Window[cvp.Span]
+		for i, near := range cvp.Window {
+			if i != cvp.Span && cvp.CoOccTable.Has(middle[0], middle[1], near[0], near[1]) {
+				cvp.CoOccTable.Add(middle[0], middle[1], near[0], near[1], 1)
 			}
 		}
 	}
@@ -265,11 +266,12 @@ func writeFxy(tx *sql.Tx, table CounterTable, coOccTable CoOccTable, tokenCounts
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
 		}
 
-		xy := coOccTable[coOccTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
+		fxy := coOccTable[coOccTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
 		fx := tokenCounts[tokenCounts.mkKey(v.Lemma, v.Upos, "")]
 		fy := tokenCounts[tokenCounts.mkKey(v.PLemma, v.PUpos, "")]
-		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
+		logDice := 14 + math.Log2(2*float64(fxy.Freq)/float64(fx.Freq+fy.Freq))
 
+		// Replace SQL invalid float values
 		if math.IsInf(logDice, 1) {
 			logDice = 3.4e38 // Substitute Inf with max float
 		} else if math.IsInf(logDice, -1) {
@@ -406,6 +408,8 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 
 	log.Info().Int("size", len(table)).Msg("collocation table done")
 
+	// prepare only pairs found for syntactic collocations
+	// we don't need to know co-occurrences for every possible pair
 	coOccTable := make(CoOccTable)
 	tokenCounts := make(FyTable)
 	for _, v := range table {
@@ -413,13 +417,12 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 		tokenCounts.Add(v.Lemma, v.Upos, "", 0)
 		tokenCounts.Add(v.PLemma, v.PUpos, "", 0)
 	}
-	window := make([][2]string, 0, 2*coOccSpan+1)
 	coProc := &CoVertProcessor{
 		Span:        coOccSpan,
 		conf:        conf,
-		CoTable:     coOccTable,
+		CoOccTable:  coOccTable,
 		TokenCounts: tokenCounts,
-		Window:      window,
+		Window:      make([][2]string, 0, 2*coOccSpan+1),
 	}
 	err = vertigo.ParseVerticalFile(pc, coProc)
 	if err != nil {
