@@ -135,8 +135,6 @@ func main() {
 	importCmd := flag.NewFlagSet("import", flag.ExitOnError)
 	forceOverwriteTbl := importCmd.Bool("f", false, "Drop target tables in case they already exist")
 	coOccSpanImp := importCmd.Int("colloc-flags-with-span", 2, "Defines window size for calculating coocurrences")
-	updateCmd := flag.NewFlagSet("update", flag.ExitOnError)
-	coOccSpanUpd := updateCmd.Int("colloc-flags-with-span", 2, "Defines window size for calculating coocurrences")
 
 	action := os.Args[1]
 	if action == "version" {
@@ -209,24 +207,6 @@ func main() {
 			log.Info().Msg("... table READY")
 		}
 		err = engine.RunPg(importCmd.Arg(1), importCmd.Arg(2), *coOccSpanImp, &corpProps.Syntax, sqlDB)
-		if err != nil {
-			log.Fatal().Err(err).Msg("failed to process")
-			return
-		}
-	case "update":
-		updateCmd.Parse(os.Args[2:])
-		conf := cnf.LoadConfig(updateCmd.Arg(0))
-		sqlDB, err := engine.Open(conf.DB)
-		if err != nil {
-			log.Fatal().Err(err).Msg("failed to open database connection")
-		}
-
-		corpProps := conf.Corpora.GetCorpusProps(updateCmd.Arg(1))
-		if corpProps == nil {
-			log.Fatal().Msgf("corpus `%s` not installed", updateCmd.Arg(1))
-			return
-		}
-		err = engine.UpdateCoOcc(updateCmd.Arg(1), updateCmd.Arg(2), *coOccSpanUpd, &corpProps.Syntax, sqlDB)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to process")
 			return

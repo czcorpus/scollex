@@ -244,35 +244,48 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 	return nil
 }
 
-func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
+func writeFxy(tx *sql.Tx, table CounterTable, coOccTable CoOccTable, tokenCounts FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*7)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
 		if i == bulkInsertChunkSize {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, co_occurrence_score) VALUES %s",
 				corpusID, strings.Join(insertPlaceholders, ", "))
 			_, err := tx.Exec(sql, args...)
 			if err != nil {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*7)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
 		}
 
-		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq)
-		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?)")
+		xy := coOccTable[coOccTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
+		fx := tokenCounts[tokenCounts.mkKey(v.Lemma, v.Upos, "")]
+		fy := tokenCounts[tokenCounts.mkKey(v.PLemma, v.PUpos, "")]
+		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
+
+		if math.IsInf(logDice, 1) {
+			logDice = 3.4e38 // Substitute Inf with max float
+		} else if math.IsInf(logDice, -1) {
+			logDice = -3.4e38 // Substitute -Inf with min float
+		} else if math.IsNaN(logDice) {
+			logDice = 0 // Substitute NaN with 0
+		}
+
+		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq, logDice)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?, ?)")
 		i++
 	}
 
 	if len(args) > 0 {
 		sql := fmt.Sprintf(
-			"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+			"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, co_occurrence_score) VALUES %s",
 			corpusID, strings.Join(insertPlaceholders, ", "))
 		_, err := tx.Exec(sql, args...)
 		if err != nil {
@@ -364,101 +377,6 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 	return nil
 }
 
-func loadCoOccData(db *sql.DB, corpusID string) (CoOccTable, FyTable, error) {
-	coTable := make(CoOccTable)
-	tokenCounts := make(FyTable)
-
-	sql := fmt.Sprintf("SELECT lemma, upos, p_lemma, p_upos FROM %s_fcolls", corpusID)
-	rows, err := db.Query(sql)
-	if err != nil {
-		return nil, nil, err
-	}
-	var lemma, upos, pLemma, pUpos string
-	for rows.Next() {
-		err := rows.Scan(&lemma, &upos, &pLemma, &pUpos)
-		if err != nil {
-			return nil, nil, err
-		}
-		coTable.Add(lemma, upos, pLemma, pUpos, 0)
-		tokenCounts.Add(lemma, upos, "", 0)
-		tokenCounts.Add(pLemma, pUpos, "", 0)
-	}
-	return coTable, tokenCounts, nil
-}
-
-func updateCoOcc(tx *sql.Tx, table CoOccTable, countsTable FyTable, corpusID string) error {
-	sql := fmt.Sprintf(
-		"UPDATE %s_fcolls SET co_occurrence_score = ? WHERE lemma = ? AND upos = ? AND p_lemma = ? AND p_upos = ?",
-		corpusID,
-	)
-
-	i := 0
-	for _, v := range table {
-		xy := table[table.mkKey(v.Lemma, v.Upos, v.CoLemma, v.CoUpos)]
-		fx := countsTable[countsTable.mkKey(v.Lemma, v.Upos, "")]
-		fy := countsTable[countsTable.mkKey(v.CoLemma, v.CoUpos, "")]
-		logDice := 14 + math.Log2(2*float64(xy.Freq)/float64(fx.Freq+fy.Freq))
-
-		if math.IsInf(logDice, 1) {
-			logDice = 3.4e38 // Substitute Inf with max float
-		} else if math.IsInf(logDice, -1) {
-			logDice = -3.4e38 // Substitute -Inf with min float
-		} else if math.IsNaN(logDice) {
-			logDice = 0 // Substitute NaN with 0
-		}
-
-		_, err := tx.Exec(sql, logDice, v.Lemma, v.Upos, v.CoLemma, v.CoUpos)
-		if err != nil {
-			tx.Rollback()
-			return err
-		}
-
-		i++
-		if i%1000 == 0 {
-			log.Debug().Msgf("Written %d lines", i)
-		}
-	}
-
-	return nil
-}
-
-func processCoOcc(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB, pc *vertigo.ParserConf, coTable CoOccTable, tokenCounts FyTable) error {
-	window := make([][2]string, 0, 2*coOccSpan+1)
-	coProc := &CoVertProcessor{
-		Span:        coOccSpan,
-		conf:        conf,
-		CoTable:     coTable,
-		TokenCounts: tokenCounts,
-		Window:      window,
-	}
-	err := vertigo.ParseVerticalFile(pc, coProc)
-	if err != nil {
-		return err
-	}
-
-	log.Info().Int("size", len(coTable)).Msg("cooccurrence table done")
-
-	ctx := context.Background()
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return err
-	}
-
-	t0 := time.Now()
-
-	if err := updateCoOcc(tx, coTable, tokenCounts, corpusID); err != nil {
-		return err
-	}
-	log.Info().Msg("writing cooccurrence data into database")
-	err = tx.Commit()
-	if err != nil {
-		return err
-	}
-
-	log.Info().Float64("durationSec", time.Since(t0).Seconds()).Msg("...writing done")
-	return nil
-}
-
 func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
 	pc := &vertigo.ParserConf{
 		InputFilePath:         vertPath,
@@ -488,6 +406,28 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 
 	log.Info().Int("size", len(table)).Msg("collocation table done")
 
+	coOccTable := make(CoOccTable)
+	tokenCounts := make(FyTable)
+	for _, v := range table {
+		coOccTable.Add(v.Lemma, v.Upos, v.PLemma, v.PUpos, 0)
+		tokenCounts.Add(v.Lemma, v.Upos, "", 0)
+		tokenCounts.Add(v.PLemma, v.PUpos, "", 0)
+	}
+	window := make([][2]string, 0, 2*coOccSpan+1)
+	coProc := &CoVertProcessor{
+		Span:        coOccSpan,
+		conf:        conf,
+		CoTable:     coOccTable,
+		TokenCounts: tokenCounts,
+		Window:      window,
+	}
+	err = vertigo.ParseVerticalFile(pc, coProc)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Int("size", len(coOccTable)).Msg("cooccurrence table done")
+
 	ctx := context.Background()
 
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
@@ -502,7 +442,7 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 
 	t0 := time.Now()
 
-	if err := writeFxy(tx, table, corpusID); err != nil {
+	if err := writeFxy(tx, table, coOccTable, tokenCounts, corpusID); err != nil {
 		return err
 	}
 	if err := writeChildren(tx, childSumTable, corpusID); err != nil {
@@ -519,30 +459,7 @@ func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, d
 	}
 	log.Info().Float64("durationSec", time.Since(t0).Seconds()).Msg("...writing done")
 
-	coTable := make(CoOccTable)
-	tokenCounts := make(FyTable)
-	for _, v := range table {
-		coTable.Add(v.Lemma, v.Upos, v.PLemma, v.PUpos, 0)
-		tokenCounts.Add(v.Lemma, v.Upos, "", 0)
-		tokenCounts.Add(v.PLemma, v.PUpos, "", 0)
-	}
-	table, parentSumTable, childSumTable = nil, nil, nil
-	processCoOcc(corpusID, vertPath, coOccSpan, conf, db, pc, coTable, tokenCounts)
-
 	return nil
-}
-
-func UpdateCoOcc(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
-	pc := &vertigo.ParserConf{
-		InputFilePath:         vertPath,
-		Encoding:              "utf-8",
-		StructAttrAccumulator: "comb",
-	}
-	coTable, tokenCounts, err := loadCoOccData(db, corpusID)
-	if err != nil {
-		return err
-	}
-	return processCoOcc(corpusID, vertPath, coOccSpan, conf, db, pc, coTable, tokenCounts)
 }
 
 func RunPg(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
