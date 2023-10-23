@@ -35,6 +35,7 @@ type FreqDistribItem struct {
 	Norm       int64   `json:"norm"`
 	IPM        float32 `json:"ipm"`
 	CollWeight float64 `json:"collWeight"`
+	CoOccScore float64 `json:"coOccScore"`
 }
 
 type FreqDistribItemList []*FreqDistribItem

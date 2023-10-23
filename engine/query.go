@@ -27,10 +27,11 @@ import (
 )
 
 type Candidate struct {
-	Lemma  string
-	Upos   string
-	FreqXY int64
-	FreqY  int64
+	Lemma      string
+	Upos       string
+	FreqXY     int64
+	FreqY      int64
+	CoOccScore float64
 }
 
 // CollDatabase
@@ -143,7 +144,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfChild(lemma, upos, deprel string, mi
 	}
 
 	sql1 := fmt.Sprintf(
-		"SELECT p_lemma, p_upos, freq "+
+		"SELECT p_lemma, p_upos, freq, co_occurrence_score "+
 			"FROM %s_fcolls "+
 			"WHERE %s ",
 		cdb.corpusID, strings.Join(whereSQL, " AND "),
@@ -157,7 +158,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfChild(lemma, upos, deprel string, mi
 	ans := make([]*Candidate, 0, 100)
 	for rows.Next() {
 		item := &Candidate{}
-		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY)
+		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.CoOccScore)
 		if err != nil {
 			return ans, mkerr(err)
 		}
@@ -211,7 +212,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 		whereArgs = append(whereArgs, upos)
 	}
 	sql1 := fmt.Sprintf(
-		"SELECT lemma, upos, freq "+
+		"SELECT lemma, upos, freq, co_occurrence_score "+
 			"FROM %s_fcolls "+
 			"WHERE %s ",
 		cdb.corpusID, strings.Join(whereSQL, " AND "),
@@ -225,7 +226,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 	ans := make([]*Candidate, 0, 100)
 	for rows.Next() {
 		item := &Candidate{}
-		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY)
+		err := rows.Scan(&item.Lemma, &item.Upos, &item.FreqXY, &item.CoOccScore)
 		if err != nil {
 			return ans, mkerr(err)
 		}
