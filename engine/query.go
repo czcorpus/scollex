@@ -100,7 +100,7 @@ func (cdb *CollDatabase) GetFreq(lemma, upos, pLemma, pUpos, deprel string) (int
 		whereArgs = append(whereArgs, pUpos)
 	}
 
-	sql := fmt.Sprintf("SELECT SUM(freq) FROM %s_fcolls WHERE %s", cdb.corpusID, strings.Join(whereSQL, " AND "))
+	sql := fmt.Sprintf("SELECT COALESCE(SUM(freq), 0) FROM %s_fcolls WHERE %s", cdb.corpusID, strings.Join(whereSQL, " AND "))
 	log.Debug().Str("sql", sql).Any("args", whereArgs).Msg("going to SELECT cumulative freq.")
 	t0 := time.Now()
 	row := cdb.db.QueryRowContext(cdb.ctx, sql, whereArgs...)
@@ -164,9 +164,9 @@ func (cdb *CollDatabase) GetCollCandidatesOfChild(lemma, upos, deprel string, mi
 		}
 
 		sql2 := fmt.Sprintf(
-			"SELECT SUM(freq) "+
+			"SELECT COALESCE(SUM(freq), 0) "+
 				"FROM %s_parent_sums "+
-				"WHERE p_lemma = ? AND p_upos = ? AND (%s)",
+				"WHERE p_lemma = ? AND p_upos = ? AND (%s) ",
 			cdb.corpusID, strings.Join(deprelSQL, " OR "))
 		whereArgs := append([]any{item.Lemma, item.Upos}, deprelArgs...)
 		rows2 := cdb.db.QueryRowContext(
@@ -231,7 +231,7 @@ func (cdb *CollDatabase) GetCollCandidatesOfParent(lemma, upos, deprel string, m
 			return ans, mkerr(err)
 		}
 		sql2 := fmt.Sprintf(
-			"SELECT SUM(freq) "+
+			"SELECT COALESCE(SUM(freq), 0) "+
 				"FROM %s_child_sums "+
 				"WHERE lemma = ? AND upos = ? AND %s ",
 			cdb.corpusID, strings.Join(deprelSQL, " OR "))
