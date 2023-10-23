@@ -20,6 +20,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -29,7 +30,7 @@ import (
 )
 
 const (
-	bulkInsertChunkSize = 10000
+	bulkInsertChunkSize = 1000
 )
 
 type FyItem struct {
@@ -57,6 +58,12 @@ func (table FyTable) Add(lemma, upos, deprel string, val int64) {
 		table[key] = v
 	}
 	v.Freq += val
+}
+
+func (table FyTable) Has(lemma, upos, deprel string) bool {
+	key := table.mkKey(lemma, upos, deprel)
+	_, ok := table[key]
+	return ok
 }
 
 type CTItem struct {
@@ -90,13 +97,39 @@ func (table CounterTable) Add(lemma, upos, pLemma, pUpos, deprel string, val int
 	v.Freq += val
 }
 
-type VertProcessor struct {
-	DeprelCol    int
-	DeprelTypes  []string
-	conf         *SyntaxProps
-	Table        CounterTable
-	ParentCounts FyTable
-	ChildCounts  FyTable
+type CoTItem struct {
+	Lemma   string
+	CoLemma string
+	Upos    string
+	CoUpos  string
+	Freq    int64
+}
+
+type CoOccTable map[string]*CoTItem
+
+func (table CoOccTable) mkKey(lemma, upos, coLemma, coUpos string) string {
+	return fmt.Sprintf("%s:%s::%s:%s", lemma, upos, coLemma, coUpos)
+}
+
+func (table CoOccTable) Add(lemma, upos, coLemma, coUpos string, val int64) {
+	key := table.mkKey(lemma, upos, coLemma, coUpos)
+	v, ok := table[key]
+	if !ok {
+		v = &CoTItem{
+			Lemma:   lemma,
+			Upos:    upos,
+			CoLemma: coLemma,
+			CoUpos:  coUpos,
+		}
+		table[key] = v
+	}
+	v.Freq += val
+}
+
+func (table CoOccTable) Has(lemma, upos, coLemma, coUpos string) bool {
+	key := table.mkKey(lemma, upos, coLemma, coUpos)
+	_, ok := table[key]
+	return ok
 }
 
 func expandDeprelMultivalue(value string) []string {
@@ -106,8 +139,8 @@ func expandDeprelMultivalue(value string) []string {
 		log.Warn().
 			Str("expression", value).
 			Msg("deprel expression not fully supported")
+		ans = append(ans, tmp...)
 	}
-	ans = append(ans, tmp...)
 	// this along with individual items does not cover whole
 	// expression but it should be ok
 	ans = append(ans, value)
@@ -122,6 +155,62 @@ func expandDeprelMultivalues(values []string) []string {
 	return ans
 }
 
+type CoVertProcessor struct {
+	Span        int
+	Window      [][2]string
+	conf        *SyntaxProps
+	CoOccTable  CoOccTable
+	TokenCounts FyTable
+}
+
+func (cvp *CoVertProcessor) ProcToken(token *vertigo.Token, line int, err error) error {
+	if err != nil {
+		return err
+	}
+	if len(token.Attrs) < 12 {
+		log.Error().Msgf("Too few token columns on line %d", line)
+		return nil
+	}
+	lemma := token.Attrs[cvp.conf.LemmaAttr.VerticalCol-1]
+	upos := token.Attrs[cvp.conf.PosAttr.VerticalCol-1]
+	if cvp.TokenCounts.Has(lemma, upos, "") {
+		cvp.TokenCounts.Add(lemma, upos, "", 1)
+	}
+
+	if len(cvp.Window) == 2*cvp.Span+1 {
+		cvp.Window = append(cvp.Window[1:], [2]string{lemma, upos})
+	} else {
+		cvp.Window = append(cvp.Window, [2]string{lemma, upos})
+	}
+
+	if len(cvp.Window) == 2*cvp.Span+1 {
+		middle := cvp.Window[cvp.Span]
+		for i, near := range cvp.Window {
+			if i != cvp.Span && cvp.CoOccTable.Has(middle[0], middle[1], near[0], near[1]) {
+				cvp.CoOccTable.Add(middle[0], middle[1], near[0], near[1], 1)
+			}
+		}
+	}
+	return nil
+}
+
+func (cvp *CoVertProcessor) ProcStruct(strc *vertigo.Structure, line int, err error) error {
+	return nil
+}
+
+func (cvp *CoVertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int, err error) error {
+	return nil
+}
+
+type VertProcessor struct {
+	DeprelCol    int
+	DeprelTypes  []string
+	conf         *SyntaxProps
+	Table        CounterTable
+	ParentCounts FyTable
+	ChildCounts  FyTable
+}
+
 func (vp *VertProcessor) ProcToken(token *vertigo.Token, line int, err error) error {
 	if err != nil {
 		return err
@@ -134,8 +223,8 @@ func (vp *VertProcessor) ProcToken(token *vertigo.Token, line int, err error) er
 	deprelTmp := token.Attrs[vp.conf.FuncAttr.VerticalCol-1]
 	lemma := token.Attrs[vp.conf.LemmaAttr.VerticalCol-1]
 	upos := token.Attrs[vp.conf.PosAttr.VerticalCol-1]
-	pUpos := token.Attrs[vp.conf.ParPosAttr.VerticalCol-1]
 	pLemma := token.Attrs[vp.conf.ParLemmaAttr.VerticalCol-1]
+	pUpos := token.Attrs[vp.conf.ParPosAttr.VerticalCol-1]
 	for _, deprel := range expandDeprelMultivalue(deprelTmp) {
 		if collections.SliceContains(vp.DeprelTypes, deprel) {
 			vp.Table.Add(lemma, upos, pLemma, pUpos, deprel, 1)
@@ -156,35 +245,49 @@ func (vp *VertProcessor) ProcStructClose(strc *vertigo.StructureClose, line int,
 	return nil
 }
 
-func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
+func writeFxy(tx *sql.Tx, table CounterTable, coOccTable CoOccTable, tokenCounts FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*7)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
 		if i == bulkInsertChunkSize {
 			sql := fmt.Sprintf(
-				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+				"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, co_occurrence_score) VALUES %s",
 				corpusID, strings.Join(insertPlaceholders, ", "))
 			_, err := tx.Exec(sql, args...)
 			if err != nil {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*7)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written Fxy bulk into database")
 		}
 
-		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq)
-		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?)")
+		fxy := coOccTable[coOccTable.mkKey(v.Lemma, v.Upos, v.PLemma, v.PUpos)]
+		fx := tokenCounts[tokenCounts.mkKey(v.Lemma, v.Upos, "")]
+		fy := tokenCounts[tokenCounts.mkKey(v.PLemma, v.PUpos, "")]
+		logDice := 14 + math.Log2(2*float64(fxy.Freq)/float64(fx.Freq+fy.Freq))
+
+		// Replace SQL invalid float values
+		if math.IsInf(logDice, 1) {
+			logDice = 3.4e38 // Substitute Inf with max float
+		} else if math.IsInf(logDice, -1) {
+			logDice = -3.4e38 // Substitute -Inf with min float
+		} else if math.IsNaN(logDice) {
+			logDice = 0 // Substitute NaN with 0
+		}
+
+		args = append(args, v.Lemma, v.Upos, v.PLemma, v.PUpos, v.Deprel, v.Freq, logDice)
+		insertPlaceholders = append(insertPlaceholders, "(?, ?, ?, ?, ?, ?, ?)")
 		i++
 	}
 
 	if len(args) > 0 {
 		sql := fmt.Sprintf(
-			"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq) VALUES %s",
+			"INSERT INTO %s_fcolls (lemma, upos, p_lemma, p_upos, deprel, freq, co_occurrence_score) VALUES %s",
 			corpusID, strings.Join(insertPlaceholders, ", "))
 		_, err := tx.Exec(sql, args...)
 		if err != nil {
@@ -198,7 +301,7 @@ func writeFxy(tx *sql.Tx, table CounterTable, corpusID string) error {
 
 func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*4)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
@@ -211,7 +314,7 @@ func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*4)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written parent Fy bulk into database")
@@ -238,7 +341,7 @@ func writeParents(tx *sql.Tx, table FyTable, corpusID string) error {
 
 func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 	var i int
-	args := make([]any, 0, bulkInsertChunkSize*6)
+	args := make([]any, 0, bulkInsertChunkSize*4)
 	insertPlaceholders := make([]string, 0, bulkInsertChunkSize)
 
 	for _, v := range table {
@@ -251,7 +354,7 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 				tx.Rollback()
 				return err
 			}
-			args = make([]any, 0, bulkInsertChunkSize*6)
+			args = make([]any, 0, bulkInsertChunkSize*4)
 			insertPlaceholders = make([]string, 0, bulkInsertChunkSize)
 			i = 0
 			log.Debug().Int("items", bulkInsertChunkSize).Msg("written child Fy bulk into database")
@@ -276,7 +379,7 @@ func writeChildren(tx *sql.Tx, table FyTable, corpusID string) error {
 	return nil
 }
 
-func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
+func runForDeprel(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
 	pc := &vertigo.ParserConf{
 		InputFilePath:         vertPath,
 		Encoding:              "utf-8",
@@ -305,6 +408,29 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 
 	log.Info().Int("size", len(table)).Msg("collocation table done")
 
+	// prepare only pairs found for syntactic collocations
+	// we don't need to know co-occurrences for every possible pair
+	coOccTable := make(CoOccTable)
+	tokenCounts := make(FyTable)
+	for _, v := range table {
+		coOccTable.Add(v.Lemma, v.Upos, v.PLemma, v.PUpos, 0)
+		tokenCounts.Add(v.Lemma, v.Upos, "", 0)
+		tokenCounts.Add(v.PLemma, v.PUpos, "", 0)
+	}
+	coProc := &CoVertProcessor{
+		Span:        coOccSpan,
+		conf:        conf,
+		CoOccTable:  coOccTable,
+		TokenCounts: tokenCounts,
+		Window:      make([][2]string, 0, 2*coOccSpan+1),
+	}
+	err = vertigo.ParseVerticalFile(pc, coProc)
+	if err != nil {
+		return err
+	}
+
+	log.Info().Int("size", len(coOccTable)).Msg("cooccurrence table done")
+
 	ctx := context.Background()
 
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{})
@@ -319,7 +445,7 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 
 	t0 := time.Now()
 
-	if err := writeFxy(tx, table, corpusID); err != nil {
+	if err := writeFxy(tx, table, coOccTable, tokenCounts, corpusID); err != nil {
 		return err
 	}
 	if err := writeChildren(tx, childSumTable, corpusID); err != nil {
@@ -331,14 +457,19 @@ func runForDeprel(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) erro
 
 	log.Info().Msg("writing fxy data into database")
 	err = tx.Commit()
+	if err != nil {
+		return err
+	}
 	log.Info().Float64("durationSec", time.Since(t0).Seconds()).Msg("...writing done")
-	return err
+
+	return nil
 }
 
-func RunPg(corpusID, vertPath string, conf *SyntaxProps, db *sql.DB) error {
+func RunPg(corpusID, vertPath string, coOccSpan int, conf *SyntaxProps, db *sql.DB) error {
 	return runForDeprel(
 		corpusID,
 		vertPath,
+		coOccSpan,
 		conf,
 		db,
 	)
