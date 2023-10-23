@@ -78,6 +78,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
+			CoOccScore: cand.CoOccScore,
 		}
 		result[i] = item
 	}
@@ -143,6 +144,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
+			CoOccScore: cand.CoOccScore,
 		}
 		result[i] = item
 	}
@@ -208,6 +210,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
+			CoOccScore: cand.CoOccScore,
 		}
 		result[i] = item
 	}
@@ -273,6 +276,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
+			CoOccScore: cand.CoOccScore,
 		}
 		result[i] = item
 	}
