@@ -121,7 +121,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "SCollEx - a Syntactic Collocations explorer\n\n")
 		fmt.Fprintf(os.Stderr, "Usage:\t%s [options] start [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] import [config.json] [corpus ID] [path to vertical file]\n", filepath.Base(os.Args[0]))
-		fmt.Fprintf(os.Stderr, "\t%s [options] update [config.json] [corpus ID] [path to vertical file]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] test [config.json]\n", filepath.Base(os.Args[0]))
 		fmt.Fprintf(os.Stderr, "\t%s [options] version\n", filepath.Base(os.Args[0]))
 		flag.PrintDefaults()
@@ -134,7 +133,7 @@ func main() {
 	}
 	importCmd := flag.NewFlagSet("import", flag.ExitOnError)
 	forceOverwriteTbl := importCmd.Bool("f", false, "Drop target tables in case they already exist")
-	coOccSpanImp := importCmd.Int("colloc-flags-with-span", 2, "Defines window size for calculating coocurrences")
+	coOccSpan := importCmd.Int("colloc-flags-with-span", 2, "Defines window size for calculating coocurrences")
 
 	action := os.Args[1]
 	if action == "version" {
@@ -206,7 +205,7 @@ func main() {
 		} else {
 			log.Info().Msg("... table READY")
 		}
-		err = engine.RunPg(importCmd.Arg(1), importCmd.Arg(2), *coOccSpanImp, &corpProps.Syntax, sqlDB)
+		err = engine.RunPg(importCmd.Arg(1), importCmd.Arg(2), *coOccSpan, &corpProps.Syntax, sqlDB)
 		if err != nil {
 			log.Fatal().Err(err).Msg("failed to process")
 			return

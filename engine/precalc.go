@@ -139,8 +139,8 @@ func expandDeprelMultivalue(value string) []string {
 		log.Warn().
 			Str("expression", value).
 			Msg("deprel expression not fully supported")
+		ans = append(ans, tmp...)
 	}
-	ans = append(ans, tmp...)
 	// this along with individual items does not cover whole
 	// expression but it should be ok
 	ans = append(ans, value)
@@ -223,8 +223,8 @@ func (vp *VertProcessor) ProcToken(token *vertigo.Token, line int, err error) er
 	deprelTmp := token.Attrs[vp.conf.FuncAttr.VerticalCol-1]
 	lemma := token.Attrs[vp.conf.LemmaAttr.VerticalCol-1]
 	upos := token.Attrs[vp.conf.PosAttr.VerticalCol-1]
-	pUpos := token.Attrs[vp.conf.ParPosAttr.VerticalCol-1]
 	pLemma := token.Attrs[vp.conf.ParLemmaAttr.VerticalCol-1]
+	pUpos := token.Attrs[vp.conf.ParPosAttr.VerticalCol-1]
 	for _, deprel := range expandDeprelMultivalue(deprelTmp) {
 		if collections.SliceContains(vp.DeprelTypes, deprel) {
 			vp.Table.Add(lemma, upos, pLemma, pUpos, deprel, 1)
