@@ -30,12 +30,12 @@ func (w Word) IsValid() bool {
 }
 
 type FreqDistribItem struct {
-	Word       string  `json:"word"`
-	Freq       int64   `json:"freq"`
-	Norm       int64   `json:"norm"`
-	IPM        float32 `json:"ipm"`
-	CollWeight float64 `json:"collWeight"`
-	CoOccScore float64 `json:"coOccScore"`
+	Word       string   `json:"word"`
+	Freq       int64    `json:"freq"`
+	Norm       int64    `json:"norm"`
+	IPM        float32  `json:"ipm"`
+	CollWeight *float64 `json:"collWeight"`
+	CoOccScore *float64 `json:"coOccScore"`
 }
 
 type FreqDistribItemList []*FreqDistribItem
