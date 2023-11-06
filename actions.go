@@ -30,6 +30,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	invalidCoOccScoreThreshold = -1000
+)
+
 func calcCollWeight(cand *engine.Candidate, fx int64) *float64 {
 	var collW *float64
 	if cand.FreqXY > 0 {
@@ -37,6 +41,13 @@ func calcCollWeight(cand *engine.Candidate, fx int64) *float64 {
 		collW = &t
 	}
 	return collW
+}
+
+func normalizeCoOccScore(v float64) *float64 {
+	if v < invalidCoOccScoreThreshold {
+		return nil
+	}
+	return &v
 }
 
 func mkCmp(result engine.FreqDistribItemList) func(i, j int) bool {
@@ -98,7 +109,7 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: calcCollWeight(cand, fx),
-			CoOccScore: &cand.CoOccScore,
+			CoOccScore: normalizeCoOccScore(cand.CoOccScore),
 		}
 		result[i] = item
 	}
@@ -159,7 +170,7 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: calcCollWeight(cand, fx),
-			CoOccScore: &cand.CoOccScore,
+			CoOccScore: normalizeCoOccScore(cand.CoOccScore),
 		}
 		result[i] = item
 	}
@@ -220,7 +231,7 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: calcCollWeight(cand, fx),
-			CoOccScore: &cand.CoOccScore,
+			CoOccScore: normalizeCoOccScore(cand.CoOccScore),
 		}
 		result[i] = item
 	}
@@ -281,7 +292,7 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
 			CollWeight: calcCollWeight(cand, fx),
-			CoOccScore: &cand.CoOccScore,
+			CoOccScore: normalizeCoOccScore(cand.CoOccScore),
 		}
 		result[i] = item
 	}
