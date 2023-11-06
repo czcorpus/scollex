@@ -30,6 +30,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func calcCollWeight(cand *engine.Candidate, fx int64) *float64 {
+	var collW *float64
+	if cand.FreqXY > 0 {
+		t := 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY)))
+		collW = &t
+	}
+	return collW
+}
+
+func mkCmp(result engine.FreqDistribItemList) func(i, j int) bool {
+	return func(i, j int) bool {
+		if result[j].CollWeight == nil {
+			return false
+		}
+		if result[i].CollWeight == nil {
+			return true
+		}
+		return *result[j].CollWeight < *result[i].CollWeight
+	}
+}
+
 type Actions struct {
 	corpora *engine.CorporaConf
 	db      *sql.DB
@@ -72,22 +93,16 @@ func (a *Actions) NounsModifiedBy(ctx *gin.Context) {
 
 	result := make(engine.FreqDistribItemList, len(candidates))
 	for i, cand := range candidates {
-
 		item := &engine.FreqDistribItem{
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
-			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
-			CoOccScore: cand.CoOccScore,
+			CollWeight: calcCollWeight(cand, fx),
+			CoOccScore: &cand.CoOccScore,
 		}
 		result[i] = item
 	}
-	sort.SliceStable(
-		result,
-		func(i, j int) bool {
-			return result[j].CollWeight < result[i].CollWeight
-		},
-	)
+	sort.SliceStable(result, mkCmp(result))
 	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
@@ -143,17 +158,12 @@ func (a *Actions) ModifiersOf(ctx *gin.Context) {
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
-			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
-			CoOccScore: cand.CoOccScore,
+			CollWeight: calcCollWeight(cand, fx),
+			CoOccScore: &cand.CoOccScore,
 		}
 		result[i] = item
 	}
-	sort.SliceStable(
-		result,
-		func(i, j int) bool {
-			return result[j].CollWeight < result[i].CollWeight
-		},
-	)
+	sort.SliceStable(result, mkCmp(result))
 	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
@@ -209,17 +219,12 @@ func (a *Actions) VerbsSubject(ctx *gin.Context) {
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
-			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
-			CoOccScore: cand.CoOccScore,
+			CollWeight: calcCollWeight(cand, fx),
+			CoOccScore: &cand.CoOccScore,
 		}
 		result[i] = item
 	}
-	sort.SliceStable(
-		result,
-		func(i, j int) bool {
-			return result[j].CollWeight < result[i].CollWeight
-		},
-	)
+	sort.SliceStable(result, mkCmp(result))
 	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
@@ -275,17 +280,12 @@ func (a *Actions) VerbsObject(ctx *gin.Context) {
 			Word:       cand.Lemma,
 			Freq:       cand.FreqXY,
 			IPM:        float32(cand.FreqXY) / float32(corpusConf.Size) * 1e6,
-			CollWeight: 14 + math.Log2(2*float64(cand.FreqXY)/(float64(fx)+float64(cand.FreqY))),
-			CoOccScore: cand.CoOccScore,
+			CollWeight: calcCollWeight(cand, fx),
+			CoOccScore: &cand.CoOccScore,
 		}
 		result[i] = item
 	}
-	sort.SliceStable(
-		result,
-		func(i, j int) bool {
-			return result[j].CollWeight < result[i].CollWeight
-		},
-	)
+	sort.SliceStable(result, mkCmp(result))
 	result = result.Cut(maxItems)
 	resp := engine.FreqDistrib{
 		Freqs:            result,
