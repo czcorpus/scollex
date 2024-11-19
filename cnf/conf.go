@@ -37,23 +37,18 @@ const (
 
 // Conf is a global configuration of the app
 type Conf struct {
-	ListenAddress          string             `json:"listenAddress"`
-	ListenPort             int                `json:"listenPort"`
-	ServerReadTimeoutSecs  int                `json:"serverReadTimeoutSecs"`
-	ServerWriteTimeoutSecs int                `json:"serverWriteTimeoutSecs"`
-	CorsAllowedOrigins     []string           `json:"corsAllowedOrigins"`
-	Corpora                engine.CorporaConf `json:"corpora"`
-	DB                     *engine.DBConf     `json:"db"`
-	LogFile                string             `json:"logFile"`
-	LogLevel               logging.LogLevel   `json:"logLevel"`
-	Language               string             `json:"language"`
-	TimeZone               string             `json:"timeZone"`
+	ListenAddress          string              `json:"listenAddress"`
+	ListenPort             int                 `json:"listenPort"`
+	ServerReadTimeoutSecs  int                 `json:"serverReadTimeoutSecs"`
+	ServerWriteTimeoutSecs int                 `json:"serverWriteTimeoutSecs"`
+	CorsAllowedOrigins     []string            `json:"corsAllowedOrigins"`
+	Corpora                engine.CorporaConf  `json:"corpora"`
+	DB                     *engine.DBConf      `json:"db"`
+	Logging                logging.LoggingConf `json:"logging"`
+	Language               string              `json:"language"`
+	TimeZone               string              `json:"timeZone"`
 
 	srcPath string
-}
-
-func (conf *Conf) IsDebugMode() bool {
-	return conf.LogLevel == "debug"
 }
 
 func (conf *Conf) TimezoneLocation() *time.Location {
