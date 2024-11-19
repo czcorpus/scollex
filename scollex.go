@@ -59,7 +59,7 @@ func runApiServer(
 	exitEvent chan os.Signal,
 	sqlDB *sql.DB,
 ) {
-	if !conf.LogLevel.IsDebugMode() {
+	if !conf.Logging.Level.IsDebugMode() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
@@ -152,7 +152,7 @@ func main() {
 			return
 
 		} else {
-			logging.SetupLogging(conf.LogFile, conf.LogLevel)
+			logging.SetupLogging(conf.Logging)
 		}
 		log.Info().Msg("Starting SCollEx")
 		cnf.ValidateAndDefaults(conf)
