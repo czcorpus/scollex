@@ -18,6 +18,7 @@ package engine
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -26,7 +27,11 @@ import (
 func Open(conf *DBConf) (*sql.DB, error) {
 	mconf := mysql.NewConfig()
 	mconf.Net = "tcp"
-	mconf.Addr = conf.Host
+	if conf.Port > 0 {
+		mconf.Addr = fmt.Sprintf("%s:%d", conf.Host, conf.Port)
+	} else {
+		mconf.Addr = conf.Host
+	}
 	mconf.User = conf.User
 	mconf.Passwd = conf.Password
 	mconf.DBName = conf.Name
